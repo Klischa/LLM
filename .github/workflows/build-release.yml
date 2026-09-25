@@ -31,6 +31,10 @@ jobs:
           gradle-version: '8.6'
           cache-disabled: true
 
+      - name: Clone llama.cpp source
+        run: |
+          git clone --depth 1 --branch b3600 https://github.com/ggerganov/llama.cpp.git android/app/src/main/cpp/llama_cpp
+
       - name: Configure Android SDK and Accept Licenses
         run: |
           echo "sdk.dir=${ANDROID_HOME}" > android/local.properties
@@ -53,10 +57,11 @@ jobs:
       - name: Build APK with Gradle
         working-directory: ./android
         run: |
+          set -o pipefail
           ./gradlew :app:assembleRelease --stacktrace 2>&1 | tee build.log || {
             echo "Release build failed, running debug build..."
             ./gradlew :app:assembleDebug --stacktrace 2>&1 | tee build.log || {
-              echo "=== GRADLE BUILD FAILED. LAST 100 LINES OF LOG: ==="
+              echo "=== GRADLE BUILD FAILED ==="
               tail -n 100 build.log
               exit 1
             }
@@ -65,18 +70,18 @@ jobs:
       - name: Locate APK files
         id: find_apk
         run: |
-          echo "Поиск всех сгенерированных APK файлов:"
+          echo "Listing all generated APK files:"
           find . -name "*.apk" -type f
           APK_PATH=$(find . -name "*release*.apk" -type f | head -n 1)
           if [ -z "$APK_PATH" ]; then
             APK_PATH=$(find . -name "*.apk" -type f | head -n 1)
           fi
           if [ -z "$APK_PATH" ]; then
-            echo "::error::Не удалось найти собранный APK!"
-            find android -maxdepth 5 || true
+            echo "::error::No APK file found in build outputs!"
+            find android/app/build -maxdepth 5 || true
             exit 1
           fi
-          echo "Найден APK: $APK_PATH"
+          echo "Found APK: $APK_PATH"
           echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
           sha256sum "$APK_PATH" > "${APK_PATH}.sha256"
           echo "apk_sha256=${APK_PATH}.sha256" >> $GITHUB_OUTPUT
