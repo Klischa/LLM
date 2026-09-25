@@ -62,10 +62,10 @@ jobs:
             echo "Release build failed, running debug build..."
             ./gradlew :app:assembleDebug --stacktrace 2>&1 | tee build.log || {
               echo "=== GRADLE BUILD FAILED ==="
-              grep -n "e: " build.log | while IFS= read -r line; do
-                echo "::error title=KotlincError::$line"
+              grep -E "error:|FAILED|exception|Exception" build.log | tail -n 40 | while IFS= read -r line; do
+                echo "::error title=BuildError::$line"
               done
-              tail -n 20 build.log | while IFS= read -r line; do
+              tail -n 25 build.log | while IFS= read -r line; do
                 echo "::error title=GradleTail::$line"
               done
               exit 1

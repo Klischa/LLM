@@ -23,14 +23,9 @@ static void llama_log_callback_capture(enum ggml_log_level level, const char * t
     if (text) {
         if (level == GGML_LOG_LEVEL_ERROR) {
             LOGE("%s", text);
-            if (g_last_error.length() < 2048) {
-                g_last_error += text;
-            }
+            g_last_error += text;
         } else if (level == GGML_LOG_LEVEL_WARN) {
             LOGE("%s", text);
-            if (g_last_error.length() < 2048) {
-                g_last_error += text;
-            }
         } else {
             LOGI("%s", text);
         }
@@ -86,9 +81,10 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeLoadModel(
     }
 
     if (!stat_ok) {
+        // Попытка прямого fopen, если stat не сработал
         FILE * f = fopen(path, "rb");
         if (!f) {
-            std::string err = "Не удалось открыть файл модели: " + std::string(strerror(errno));
+            std::string err = "Не удалось открыть файл: " + std::string(strerror(errno));
             LOGE("%s (%s)", err.c_str(), path);
             env->ReleaseStringUTFChars(model_path, path);
             return env->NewStringUTF(err.c_str());
@@ -123,6 +119,7 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeLoadModel(
     g_model = llama_load_model_from_file(path, model_params);
     if (!g_model) {
         LOGI("Загрузка с use_mmap=true не удалась, повторная попытка с use_mmap=false...");
+        g_last_error.clear();
         model_params.use_mmap = false;
         g_model = llama_load_model_from_file(path, model_params);
     }
@@ -172,7 +169,7 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeStop(JNIEnv *env, jobject thiz) {
 
 JNIEXPORT void JNICALL
 Java_com_klischa_llmnotes_LlamaBridge_nativeUnload(JNIEnv *env, jobject thiz) {
-    LOGI("Выгрузка модели и контекста");
+    LOGI("Выгрузка модели и освобождение памяти");
     if (g_context) {
         llama_free(g_context);
         g_context = nullptr;
@@ -187,58 +184,49 @@ JNIEXPORT jstring JNICALL
 Java_com_klischa_llmnotes_LlamaBridge_nativeFormatPrompt(
     JNIEnv *env,
     jobject thiz,
-    jstring system_prompt,
-    jstring user_prompt
+    jstring system_prompt_str,
+    jstring user_prompt_str
 ) {
-    const char *sys_str = env->GetStringUTFChars(system_prompt, nullptr);
-    const char *usr_str = env->GetStringUTFChars(user_prompt, nullptr);
+    if (!g_model) return user_prompt_str;
 
-    std::string formatted;
+    const char *sys_ptr = system_prompt_str ? env->GetStringUTFChars(system_prompt_str, nullptr) : nullptr;
+    const char *usr_ptr = user_prompt_str ? env->GetStringUTFChars(user_prompt_str, nullptr) : nullptr;
 
-    if (g_model) {
-        llama_chat_message chat_msgs[2];
-        chat_msgs[0].role = "system";
-        chat_msgs[0].content = sys_str;
-        chat_msgs[1].role = "user";
-        chat_msgs[1].content = usr_str;
+    std::string sys_str = sys_ptr ? sys_ptr : "";
+    std::string usr_str = usr_ptr ? usr_ptr : "";
 
-        std::vector<char> buf(4096);
-        int res = llama_chat_apply_template(
-            llama_model_chat_template(g_model, nullptr),
-            chat_msgs,
-            2,
-            true,
-            buf.data(),
-            buf.size()
-        );
+    if (sys_ptr) env->ReleaseStringUTFChars(system_prompt_str, sys_ptr);
+    if (usr_ptr) env->ReleaseStringUTFChars(user_prompt_str, usr_ptr);
 
-        if (res > (int)buf.size()) {
-            buf.resize(res + 1);
-            res = llama_chat_apply_template(
-                llama_model_chat_template(g_model, nullptr),
-                chat_msgs,
-                2,
-                true,
-                buf.data(),
-                buf.size()
-            );
-        }
+    std::vector<llama_chat_message> chat;
+    if (!sys_str.empty()) {
+        chat.push_back({"system", sys_str.c_str()});
+    }
+    if (!usr_str.empty()) {
+        chat.push_back({"user", usr_str.c_str()});
+    }
 
-        if (res > 0) {
-            formatted = std::string(buf.data(), res);
+    if (chat.empty()) {
+        return env->NewStringUTF("");
+    }
+
+    int32_t req_len = llama_chat_apply_template(g_model, nullptr, chat.data(), chat.size(), true, nullptr, 0);
+
+    if (req_len > 0) {
+        std::vector<char> buf(req_len + 1, 0);
+        int32_t res_len = llama_chat_apply_template(g_model, nullptr, chat.data(), chat.size(), true, buf.data(), buf.size());
+        if (res_len > 0) {
+            return env->NewStringUTF(std::string(buf.data(), res_len).c_str());
         }
     }
 
-    if (formatted.empty()) {
-        formatted = "<|im_start|>system\n" + std::string(sys_str) +
-                    "<|im_end|>\n<|im_start|>user\n" + std::string(usr_str) +
-                    "<|im_end|>\n<|im_start|>assistant\n";
+    std::string fallback = "";
+    if (!sys_str.empty()) {
+        fallback += "<|im_start|>system\n" + sys_str + "<|im_end|>\n";
     }
+    fallback += "<|im_start|>user\n" + usr_str + "<|im_end|>\n<|im_start|>assistant\n";
 
-    env->ReleaseStringUTFChars(system_prompt, sys_str);
-    env->ReleaseStringUTFChars(user_prompt, usr_str);
-
-    return env->NewStringUTF(formatted.c_str());
+    return env->NewStringUTF(fallback.c_str());
 }
 
 JNIEXPORT jstring JNICALL
@@ -249,121 +237,101 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
     jint max_tokens,
     jfloat temperature,
     jfloat top_p,
-    jobject callback
+    jobject callback_obj
 ) {
     if (!g_model || !g_context) {
-        LOGE("Генерация невозможна: модель не загружена");
-        return env->NewStringUTF("");
+        LOGE("Модель не инициализирована!");
+        return env->NewStringUTF("Ошибка: модель не загружена.");
     }
+
+    const char *prompt = env->GetStringUTFChars(prompt_str, nullptr);
+    if (!prompt) return env->NewStringUTF("");
 
     g_stop_requested.store(false);
 
-    const char *prompt = env->GetStringUTFChars(prompt_str, nullptr);
-    std::string full_prompt(prompt);
-    env->ReleaseStringUTFChars(prompt_str, prompt);
-
     jclass callback_class = nullptr;
     jmethodID on_token_method = nullptr;
-    if (callback != nullptr) {
-        callback_class = env->GetObjectClass(callback);
+    if (callback_obj != nullptr) {
+        callback_class = env->GetObjectClass(callback_obj);
         on_token_method = env->GetMethodID(callback_class, "onToken", "(Ljava/lang/String;)V");
     }
 
-    const llama_vocab * vocab = llama_model_get_vocab(g_model);
-
     // Токенизация входного промпта
-    int n_tokens_max = full_prompt.length() + 32;
-    std::vector<llama_token> prompt_tokens(n_tokens_max);
-    int n_tokens = llama_tokenize(
-        vocab,
-        full_prompt.c_str(),
-        full_prompt.length(),
-        prompt_tokens.data(),
-        prompt_tokens.size(),
-        true,
-        true
-    );
-
-    if (n_tokens < 0) {
-        prompt_tokens.resize(-n_tokens);
-        n_tokens = llama_tokenize(
-            vocab,
-            full_prompt.c_str(),
-            full_prompt.length(),
-            prompt_tokens.data(),
-            prompt_tokens.size(),
-            true,
-            true
-        );
+    int n_prompt_tokens = -llama_tokenize(g_model, prompt, strlen(prompt), nullptr, 0, true, true);
+    std::vector<llama_token> prompt_tokens(n_prompt_tokens);
+    if (llama_tokenize(g_model, prompt, strlen(prompt), prompt_tokens.data(), prompt_tokens.size(), true, true) < 0) {
+        env->ReleaseStringUTFChars(prompt_str, prompt);
+        return env->NewStringUTF("Ошибка токенизации");
     }
-    prompt_tokens.resize(n_tokens);
 
-    LOGI("Входной промпт токенизирован в %d токенов", n_tokens);
+    env->ReleaseStringUTFChars(prompt_str, prompt);
 
     // Подготовка KV-кэша и батча
     llama_kv_cache_clear(g_context);
+    struct llama_batch batch = llama_batch_init(512, 0, 1);
 
-    llama_batch batch = llama_batch_init(512, 0, 1);
-    for (int i = 0; i < n_tokens; i++) {
-        batch_add_token(batch, prompt_tokens[i], i, {0}, false);
-        if (batch.n_tokens == 512 || i == n_tokens - 1) {
-            if (llama_decode(g_context, batch) != 0) {
-                LOGE("Ошибка декодирования входного промпта");
-                llama_batch_free(batch);
-                return env->NewStringUTF("");
-            }
-            batch.n_tokens = 0;
-        }
+    for (size_t i = 0; i < prompt_tokens.size(); ++i) {
+        bool need_logits = (i == prompt_tokens.size() - 1);
+        batch_add_token(batch, prompt_tokens[i], i, { 0 }, need_logits);
     }
 
-    // Инициализация сэмплера
-    llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p, 1));
-    llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature));
-    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+    if (llama_decode(g_context, batch) != 0) {
+        LOGE("Ошибка: сбой llama_decode для промпта");
+        llama_batch_free(batch);
+        return env->NewStringUTF("Ошибка декодирования промпта");
+    }
 
-    std::string result_text = "";
-    int n_cur = n_tokens;
+    std::string full_response = "";
+    int n_cur = batch.n_tokens;
     int generated_count = 0;
+    int32_t n_vocab = llama_n_vocab(g_model);
 
+    // Цикл декодирования токенов
     while (generated_count < max_tokens && !g_stop_requested.load()) {
-        llama_token new_token_id = llama_sampler_sample(smpl, g_context, -1);
-        llama_sampler_accept(smpl, new_token_id);
+        float * logits = llama_get_logits_ith(g_context, batch.n_tokens - 1);
 
-        if (llama_vocab_is_eog(vocab, new_token_id)) {
-            LOGI("Встречен токен конца последовательности (EOG)");
+        std::vector<llama_token_data> candidates;
+        candidates.reserve(n_vocab);
+        for (llama_token token_id = 0; token_id < n_vocab; ++token_id) {
+            candidates.emplace_back(llama_token_data{token_id, logits[token_id], 0.0f});
+        }
+        llama_token_data_array candidates_p = { candidates.data(), candidates.size(), false };
+
+        llama_sample_top_p(g_context, &candidates_p, top_p, 1);
+        llama_sample_temp(g_context, &candidates_p, temperature);
+        llama_token new_token_id = llama_sample_token(g_context, &candidates_p);
+
+        if (llama_token_is_eog(g_model, new_token_id)) {
             break;
         }
 
         char piece_buf[256];
-        int n_piece = llama_token_to_piece(vocab, new_token_id, piece_buf, sizeof(piece_buf), 0, false);
-        if (n_piece > 0) {
-            std::string piece(piece_buf, n_piece);
-            result_text += piece;
+        int n_chars = llama_token_to_piece(g_model, new_token_id, piece_buf, sizeof(piece_buf), 0, true);
+        if (n_chars > 0) {
+            std::string piece(piece_buf, n_chars);
+            full_response += piece;
 
-            if (callback != nullptr && on_token_method != nullptr) {
-                jstring jpiece = env->NewStringUTF(piece.c_str());
-                env->CallVoidMethod(callback, on_token_method, jpiece);
-                env->DeleteLocalRef(jpiece);
+            if (callback_obj != nullptr && on_token_method != nullptr) {
+                jstring piece_jstr = env->NewStringUTF(piece.c_str());
+                env->CallVoidMethod(callback_obj, on_token_method, piece_jstr);
+                env->DeleteLocalRef(piece_jstr);
             }
         }
 
-        generated_count++;
         batch.n_tokens = 0;
-        batch_add_token(batch, new_token_id, n_cur, {0}, true);
-        n_cur++;
+        batch_add_token(batch, new_token_id, n_cur, { 0 }, true);
 
         if (llama_decode(g_context, batch) != 0) {
-            LOGE("Ошибка декодирования сгенерированного токена");
+            LOGE("Ошибка: сбой декодирования токена");
             break;
         }
+
+        n_cur++;
+        generated_count++;
     }
 
-    llama_sampler_free(smpl);
     llama_batch_free(batch);
-
-    LOGI("Генерация завершена. Сгенерировано %d токенов", generated_count);
-    return env->NewStringUTF(result_text.c_str());
+    return env->NewStringUTF(full_response.c_str());
 }
 
 } // extern "C"
