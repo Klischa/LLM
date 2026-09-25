@@ -35,7 +35,6 @@ jobs:
         run: |
           echo "sdk.dir=${ANDROID_HOME}" > android/local.properties
           yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          # Проверяем наличие NDK 26.1
           if [ -d "${ANDROID_HOME}/ndk/26.1.10909125" ]; then
             echo "ndk.dir=${ANDROID_HOME}/ndk/26.1.10909125" >> android/local.properties
             echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/26.1.10909125" >> $GITHUB_ENV
@@ -54,7 +53,14 @@ jobs:
       - name: Build APK with Gradle
         working-directory: ./android
         run: |
-          ./gradlew assembleRelease --stacktrace || ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleRelease --stacktrace 2>&1 | tee build.log || {
+            echo "Release build failed, checking debug build..."
+            ./gradlew assembleDebug --stacktrace 2>&1 | tee build.log || {
+              echo "=== GRADLE BUILD FAILED. LAST 100 LINES OF LOG: ==="
+              tail -n 100 build.log
+              exit 1
+            }
+          }
 
       - name: Locate APK files
         id: find_apk

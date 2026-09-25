@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.klischa.llmnotes.ui
 
 import android.widget.Toast
@@ -5,9 +7,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,7 +28,6 @@ import androidx.compose.ui.unit.sp
 import com.klischa.llmnotes.LLMViewModel
 import com.klischa.llmnotes.UiState
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     viewModel: LLMViewModel,
@@ -52,7 +57,7 @@ fun ChatScreen(
                 actions = {
                     IconButton(onClick = onSelectModelClick) {
                         Icon(
-                            imageVector = Icons.Default.FolderOpen,
+                            imageVector = Icons.Default.Add,
                             contentDescription = "Выбрать GGUF"
                         )
                     }
@@ -169,7 +174,7 @@ fun ChatScreen(
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Default.Stop, contentDescription = null)
+                    Icon(Icons.Default.Close, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Остановить генерацию")
                 }
@@ -206,7 +211,7 @@ fun ChatScreen(
                                 Toast.makeText(context, "Скопировано в буфер!", Toast.LENGTH_SHORT).show()
                             }) {
                                 Icon(
-                                    imageVector = Icons.Default.ContentCopy,
+                                    imageVector = Icons.Default.Share,
                                     contentDescription = "Копировать",
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -223,7 +228,13 @@ fun ChatScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
-                        SelectionContainerText(text = uiState.outputText)
+                        SelectionContainer {
+                            Text(
+                                text = uiState.outputText,
+                                style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
                 }
             }
@@ -287,7 +298,6 @@ fun DeviceInfoCard(uiState: UiState, viewModel: LLMViewModel) {
                     style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
                 )
 
-                // Переключатель потоков (оптимум 2 для 2x Cortex-A76)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Потоки:", style = MaterialTheme.typography.labelSmall)
                     Spacer(modifier = Modifier.width(4.dp))
@@ -302,16 +312,5 @@ fun DeviceInfoCard(uiState: UiState, viewModel: LLMViewModel) {
                 }
             }
         }
-    }
-}
-
-@Composable
-fun SelectionContainerText(text: String) {
-    androidx.compose.foundation.text.selection.SelectionContainer {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
-            color = MaterialTheme.colorScheme.onSurface
-        )
     }
 }
