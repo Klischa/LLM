@@ -7,133 +7,12 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <dlfcn.h>
-#include <cstdarg>
 #include <android/log.h>
 #include "llama.h"
 
 #define TAG "LlamaJni"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
-
-// Перехват функций открытия файлов для поддержки /proc/self/fd/ дескрипторов Android SAF.
-// При открытии через /proc/self/fd/ Android 11+ блокирует fopen/open из-за Scoped Storage.
-// Перехват выполняет dup() над уже открытым дескриптором и fdopen(), обеспечивая мгновенный
-// zero-copy доступ и mmap без копирования файла.
-extern "C" {
-
-FILE * fopen(const char * path, const char * mode) {
-    static FILE * (*libc_fopen)(const char *, const char *) = nullptr;
-    if (!libc_fopen) {
-        libc_fopen = (FILE * (*)(const char *, const char *))dlsym(RTLD_NEXT, "fopen");
-    }
-
-    if (path && strncmp(path, "/proc/self/fd/", 14) == 0) {
-        int fd = atoi(path + 14);
-        if (fd >= 0) {
-            int dup_fd = dup(fd);
-            if (dup_fd >= 0) {
-                lseek(dup_fd, 0, SEEK_SET);
-                FILE * fp = fdopen(dup_fd, mode);
-                if (fp) {
-                    LOGI("fopen: перехвачен %s -> dup fd %d", path, dup_fd);
-                    return fp;
-                }
-                close(dup_fd);
-            }
-        }
-    }
-    return libc_fopen ? libc_fopen(path, mode) : nullptr;
-}
-
-FILE * fopen64(const char * path, const char * mode) {
-    static FILE * (*libc_fopen64)(const char *, const char *) = nullptr;
-    if (!libc_fopen64) {
-        libc_fopen64 = (FILE * (*)(const char *, const char *))dlsym(RTLD_NEXT, "fopen64");
-        if (!libc_fopen64) {
-            libc_fopen64 = (FILE * (*)(const char *, const char *))dlsym(RTLD_NEXT, "fopen");
-        }
-    }
-
-    if (path && strncmp(path, "/proc/self/fd/", 14) == 0) {
-        int fd = atoi(path + 14);
-        if (fd >= 0) {
-            int dup_fd = dup(fd);
-            if (dup_fd >= 0) {
-                lseek(dup_fd, 0, SEEK_SET);
-                FILE * fp = fdopen(dup_fd, mode);
-                if (fp) {
-                    LOGI("fopen64: перехвачен %s -> dup fd %d", path, dup_fd);
-                    return fp;
-                }
-                close(dup_fd);
-            }
-        }
-    }
-    return libc_fopen64 ? libc_fopen64(path, mode) : nullptr;
-}
-
-int open(const char * pathname, int flags, ...) {
-    static int (*libc_open)(const char *, int, mode_t) = nullptr;
-    if (!libc_open) {
-        libc_open = (int (*)(const char *, int, mode_t))dlsym(RTLD_NEXT, "open");
-    }
-
-    if (pathname && strncmp(pathname, "/proc/self/fd/", 14) == 0) {
-        int fd = atoi(pathname + 14);
-        if (fd >= 0) {
-            int dup_fd = dup(fd);
-            if (dup_fd >= 0) {
-                lseek(dup_fd, 0, SEEK_SET);
-                LOGI("open: перехвачен %s -> dup fd %d", pathname, dup_fd);
-                return dup_fd;
-            }
-        }
-    }
-
-    mode_t mode = 0;
-    if (flags & O_CREAT) {
-        va_list args;
-        va_start(args, flags);
-        mode = (mode_t)va_arg(args, int);
-        va_end(args);
-    }
-    return libc_open ? libc_open(pathname, flags, mode) : -1;
-}
-
-int open64(const char * pathname, int flags, ...) {
-    static int (*libc_open64)(const char *, int, mode_t) = nullptr;
-    if (!libc_open64) {
-        libc_open64 = (int (*)(const char *, int, mode_t))dlsym(RTLD_NEXT, "open64");
-        if (!libc_open64) {
-            libc_open64 = (int (*)(const char *, int, mode_t))dlsym(RTLD_NEXT, "open");
-        }
-    }
-
-    if (pathname && strncmp(pathname, "/proc/self/fd/", 14) == 0) {
-        int fd = atoi(pathname + 14);
-        if (fd >= 0) {
-            int dup_fd = dup(fd);
-            if (dup_fd >= 0) {
-                lseek(dup_fd, 0, SEEK_SET);
-                LOGI("open64: перехвачен %s -> dup fd %d", pathname, dup_fd);
-                return dup_fd;
-            }
-        }
-    }
-
-    mode_t mode = 0;
-    if (flags & O_CREAT) {
-        va_list args;
-        va_start(args, flags);
-        mode = (mode_t)va_arg(args, int);
-        va_end(args);
-    }
-    return libc_open64 ? libc_open64(pathname, flags, mode) : -1;
-}
-
-} // extern "C"
 
 static llama_model   * g_model   = nullptr;
 static llama_context * g_context = nullptr;
@@ -328,7 +207,7 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatPrompt(
             llama_model_chat_template(g_model, nullptr),
             chat_msgs,
             2,
-            true, // add_ass: true для добавления тега ответа ассистента
+            true,
             buf.data(),
             buf.size()
         );

@@ -1,9 +1,12 @@
 package com.klischa.llmnotes
 
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.DocumentsContract
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,6 +36,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel = ViewModelProvider(this)[LLMViewModel::class.java]
+
+        // Запрос разрешения доступа ко всем файлам для прямого zero-copy чтения моделей
+        checkAndRequestAllFilesAccess()
+
         setContent {
             LLMNotesTheme {
                 ChatScreen(
@@ -45,9 +52,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun checkAndRequestAllFilesAccess() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (_: Exception) {
+                    try {
+                        val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                        startActivity(intent)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
     /**
      * Попытка извлечь реальный путь к файлу из URI провайдера Android,
-     * если приложению предоставлен доступ к файловой системе (например, All Files Access).
+     * если приложению предоставлен доступ к файловой системе (All Files Access).
      */
     private fun getRealPathFromUri(uri: Uri): String? {
         if (uri.scheme == "file") return uri.path
@@ -70,9 +95,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-            } catch (e: Exception) {
-                // Игнорируем и возвращаем null для фоллбэка на FileDescriptor
-            }
+            } catch (_: Exception) {}
         }
         return null
     }
