@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">LLM Заметки (Qwen2.5)</string>
+    <string name="load_model">Загрузить модель GGUF</string>
+    <string name="model_not_loaded">Модель не загружена</string>
+    <string name="model_loaded">Модель готова к работе</string>
+    <string name="enter_note_hint">Вставьте текст заметки или черновика сюда...</string>
+    <string name="enter_question_hint">Задайте вопрос ассистенту...</string>
+    <string name="summarize_action">Сделать саммари</string>
+    <string name="extract_tasks_action">Выделить задачи</string>
+    <string name="stop_generation">Остановить</string>
+    <string name="generating">Генерация ответа...</string>
+</resources>
