@@ -3,6 +3,7 @@
 #include <vector>
 #include <atomic>
 #include <cstring>
+#include <cerrno>
 #include <android/log.h>
 #include "llama.h"
 
@@ -13,6 +14,20 @@
 static llama_model   * g_model   = nullptr;
 static llama_context * g_context = nullptr;
 static std::atomic<bool> g_stop_requested(false);
+static std::string g_last_error = "";
+
+static void llama_log_callback_capture(enum ggml_log_level level, const char * text, void * user_data) {
+    if (text) {
+        if (level == GGML_LOG_LEVEL_ERROR) {
+            LOGE("%s", text);
+            g_last_error += text;
+        } else if (level == GGML_LOG_LEVEL_WARN) {
+            LOGE("%s", text);
+        } else {
+            LOGI("%s", text);
+        }
+    }
+}
 
 static void batch_add_token(struct llama_batch & batch, llama_token id, llama_pos pos, const std::vector<llama_seq_id> & seq_ids, bool logits) {
     batch.token   [batch.n_tokens] = id;
@@ -31,10 +46,11 @@ JNIEXPORT jboolean JNICALL
 Java_com_klischa_llmnotes_LlamaBridge_nativeInit(JNIEnv *env, jobject thiz) {
     LOGI("Инициализация llama_backend_init()");
     llama_backend_init();
+    llama_log_set(llama_log_callback_capture, nullptr);
     return JNI_TRUE;
 }
 
-JNIEXPORT jboolean JNICALL
+JNIEXPORT jstring JNICALL
 Java_com_klischa_llmnotes_LlamaBridge_nativeLoadModel(
     JNIEnv *env,
     jobject thiz,
@@ -42,14 +58,47 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeLoadModel(
     jint n_ctx,
     jint n_threads
 ) {
+    g_last_error.clear();
+
     const char *path = env->GetStringUTFChars(model_path, nullptr);
     if (!path) {
-        LOGE("Не удалось прочитать путь к модели");
-        return JNI_FALSE;
+        return env->NewStringUTF("Не удалось прочитать путь к файлу модели");
     }
 
     LOGI("Загрузка модели из: %s (контекст: %d, потоков: %d)", path, n_ctx, n_threads);
 
+    // 1. Проверка существования и размера файла
+    struct stat st;
+    bool stat_ok = false;
+    if (strncmp(path, "/proc/self/fd/", 14) == 0) {
+        int fd = atoi(path + 14);
+        stat_ok = (fstat(fd, &st) == 0);
+    } else {
+        stat_ok = (stat(path, &st) == 0);
+    }
+
+    if (!stat_ok) {
+        // Попытка прямого fopen, если stat не сработал
+        FILE * f = fopen(path, "rb");
+        if (!f) {
+            std::string err = "Не удалось открыть файл: " + std::string(strerror(errno));
+            LOGE("%s (%s)", err.c_str(), path);
+            env->ReleaseStringUTFChars(model_path, path);
+            return env->NewStringUTF(err.c_str());
+        }
+        fseek(f, 0, SEEK_END);
+        st.st_size = ftell(f);
+        fclose(f);
+    }
+
+    if (st.st_size < 1024 * 1024) {
+        std::string err = "Файл поврежден или недокачан (размер: " + std::to_string(st.st_size / 1024) + " КБ)";
+        LOGE("%s", err.c_str());
+        env->ReleaseStringUTFChars(model_path, path);
+        return env->NewStringUTF(err.c_str());
+    }
+
+    // Освобождение ранее загруженных ресурсов
     if (g_context) {
         llama_free(g_context);
         g_context = nullptr;
@@ -59,34 +108,54 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeLoadModel(
         g_model = nullptr;
     }
 
+    // 2. Загрузка модели (сначала пробуем use_mmap = true, при ошибке — use_mmap = false)
     llama_model_params model_params = llama_model_default_params();
     model_params.use_mmap = true;
     model_params.use_mlock = false;
 
     g_model = llama_load_model_from_file(path, model_params);
+    if (!g_model) {
+        LOGI("Загрузка с use_mmap=true не удалась, повторная попытка с use_mmap=false...");
+        g_last_error.clear();
+        model_params.use_mmap = false;
+        g_model = llama_load_model_from_file(path, model_params);
+    }
     env->ReleaseStringUTFChars(model_path, path);
 
     if (!g_model) {
-        LOGE("Ошибка: не удалось загрузить модель GGUF");
-        return JNI_FALSE;
+        std::string err = "Ошибка llama_load_model_from_file: " + (g_last_error.empty() ? "неверный формат GGUF или поврежденный файл" : g_last_error);
+        LOGE("%s", err.c_str());
+        return env->NewStringUTF(err.c_str());
     }
 
-    llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = n_ctx > 0 ? n_ctx : 2048;
-    ctx_params.n_batch = 512;
-    ctx_params.n_threads = n_threads > 0 ? n_threads : 2;
-    ctx_params.n_threads_batch = n_threads > 0 ? n_threads : 2;
+    // 3. Создание контекста с адаптивным размером (для моделей 3B-4B)
+    int target_ctx = n_ctx > 0 ? n_ctx : 2048;
+    int ctx_attempts[] = { target_ctx, 1024, 512 };
 
-    g_context = llama_new_context_with_model(g_model, ctx_params);
+    for (int ctx_size : ctx_attempts) {
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx_params.n_ctx = ctx_size;
+        ctx_params.n_batch = 512;
+        ctx_params.n_threads = n_threads > 0 ? n_threads : 2;
+        ctx_params.n_threads_batch = n_threads > 0 ? n_threads : 2;
+
+        g_context = llama_new_context_with_model(g_model, ctx_params);
+        if (g_context) {
+            LOGI("Контекст llama успешно создан (n_ctx = %d)!", ctx_size);
+            break;
+        }
+    }
+
     if (!g_context) {
-        LOGE("Ошибка: не удалось создать контекст llama");
         llama_free_model(g_model);
         g_model = nullptr;
-        return JNI_FALSE;
+        std::string err = "Недостаточно памяти для создания контекста: " + g_last_error;
+        LOGE("%s", err.c_str());
+        return env->NewStringUTF(err.c_str());
     }
 
     LOGI("Модель успешно загружена в память!");
-    return JNI_TRUE;
+    return env->NewStringUTF(""); // Пустая строка означает успех
 }
 
 JNIEXPORT void JNICALL
@@ -138,7 +207,6 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatPrompt(
         return env->NewStringUTF("");
     }
 
-    // 1. Попытка применить встроенный шаблон модели из метаданных GGUF
     int32_t req_len = llama_chat_apply_template(g_model, nullptr, chat.data(), chat.size(), true, nullptr, 0);
 
     if (req_len > 0) {
@@ -149,7 +217,6 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatPrompt(
         }
     }
 
-    // 2. Универсальный фоллбэк ChatML
     std::string fallback = "";
     if (!sys_str.empty()) {
         fallback += "<|im_start|>system\n" + sys_str + "<|im_end|>\n";
@@ -231,12 +298,10 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
         llama_sample_temp(g_context, &candidates_p, temperature);
         llama_token new_token_id = llama_sample_token(g_context, &candidates_p);
 
-        // Проверка конца генерации
         if (llama_token_is_eog(g_model, new_token_id)) {
             break;
         }
 
-        // Преобразование токена в строку
         char piece_buf[256];
         int n_chars = llama_token_to_piece(g_model, new_token_id, piece_buf, sizeof(piece_buf), 0, true);
         if (n_chars > 0) {

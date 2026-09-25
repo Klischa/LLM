@@ -1,6 +1,11 @@
 package com.klischa.llmnotes
 
 import android.app.Application
+import android.content.ContentResolver
+import android.net.Uri
+import android.os.ParcelFileDescriptor
+import android.provider.OpenableColumns
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -9,6 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileOutputStream
 
 enum class SystemPromptPreset(val title: String, val prompt: String) {
     UNIVERSAL(
@@ -36,6 +43,7 @@ enum class SystemPromptPreset(val title: String, val prompt: String) {
 
 data class UiState(
     val isModelLoaded: Boolean = false,
+    val isLoadingModel: Boolean = false,
     val modelPath: String = "",
     val isGenerating: Boolean = false,
     val inputText: String = "",
@@ -57,6 +65,19 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    private var openPfd: ParcelFileDescriptor? = null
+
+    companion object {
+        private const val TAG = "LLMViewModel"
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        openPfd?.close()
+        openPfd = null
+        LlamaBridge.nativeUnload()
+    }
 
     fun updateInputText(text: String) {
         _uiState.update { it.copy(inputText = text) }
@@ -86,35 +107,228 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(temperature = temp) }
     }
 
-    fun loadModel(filePath: String) {
+    /**
+     * Загрузка модели из URI Android Storage Access Framework (SAF).
+     * Приоритет отдается мгновенной загрузке через прямой путь / FileDescriptor
+     * без дублирования файла и расхода дисковой памяти.
+     */
+    fun loadModelUri(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(statusMessage = "Загрузка модели в память...") }
-            updateRamUsage()
+            val contentResolver = getApplication<Application>().contentResolver
+            val (displayName, fileSize) = queryUriMetadata(contentResolver, uri)
 
-            val success = LlamaBridge.nativeLoadModel(
-                filePath,
-                2048,
-                _uiState.value.threadCount
-            )
+            _uiState.update {
+                it.copy(
+                    isLoadingModel = true,
+                    statusMessage = "Подготовка файла модели ($displayName)..."
+                )
+            }
 
-            if (success) {
-                _uiState.update {
-                    it.copy(
-                        isModelLoaded = true,
-                        modelPath = filePath,
-                        statusMessage = "Модель готова к работе (потоков: ${it.threadCount})"
-                    )
+            // Закрываем предыдущий дескриптор, если был открыт
+            openPfd?.close()
+            openPfd = null
+
+            // Способ 1: Прямой путь к файлу (если схема uri = file)
+            if (uri.scheme == "file") {
+                val directPath = uri.path
+                if (directPath != null && File(directPath).canRead()) {
+                    loadModelInternal(directPath, displayName)
+                    return@launch
                 }
-            } else {
+            }
+
+            // Способ 2: Открытие через File Descriptor (SAF proc/self/fd) - без копирования
+            try {
+                val pfd = contentResolver.openFileDescriptor(uri, "r")
+                if (pfd != null) {
+                    val fd = pfd.fd
+                    val fdPath = "/proc/self/fd/$fd"
+
+                    // Проверяем, можно ли определить реальный путь через readlink
+                    val realPath = try {
+                        android.system.Os.readlink(fdPath)
+                    } catch (e: Exception) {
+                        null
+                    }
+
+                    val pathToUse = if (realPath != null && File(realPath).canRead() && File(realPath).length() > 0) {
+                        Log.i(TAG, "Определен прямой путь к файлу: $realPath")
+                        pfd.close()
+                        realPath
+                    } else {
+                        Log.i(TAG, "Используем дескриптор SAF: $fdPath")
+                        openPfd = pfd // Удерживаем дескриптор открытым на время работы модели
+                        fdPath
+                    }
+
+                    _uiState.update {
+                        it.copy(statusMessage = "Загрузка модели в память ($displayName)...")
+                    }
+
+                    val error = LlamaBridge.nativeLoadModel(
+                        pathToUse,
+                        2048,
+                        _uiState.value.threadCount
+                    )
+
+                    if (error.isEmpty()) {
+                        _uiState.update {
+                            it.copy(
+                                isModelLoaded = true,
+                                isLoadingModel = false,
+                                modelPath = displayName,
+                                statusMessage = "Модель готова: $displayName"
+                            )
+                        }
+                        updateRamUsage()
+                        return@launch
+                    } else {
+                        Log.w(TAG, "Не удалось загрузить через FD/прямой путь: $error")
+                        // Если ошибка связана со структурой модели или RAM, копирование не поможет
+                        val isFileAccessError = error.contains("Не удалось открыть") ||
+                                                error.contains("не найден") ||
+                                                error.contains("errno")
+                        if (!isFileAccessError) {
+                            openPfd?.close()
+                            openPfd = null
+                            _uiState.update {
+                                it.copy(
+                                    isModelLoaded = false,
+                                    isLoadingModel = false,
+                                    statusMessage = error
+                                )
+                            }
+                            updateRamUsage()
+                            return@launch
+                        }
+                        openPfd?.close()
+                        openPfd = null
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Ошибка открытия FileDescriptor: ${e.message}")
+            }
+
+            // Способ 3: Кэширование во внутреннее хранилище приложения при необходимости
+            val appFilesDir = getApplication<Application>().filesDir
+            val freeBytes = appFilesDir.freeSpace
+            val neededBytes = if (fileSize > 0) fileSize else 1500L * 1024 * 1024
+
+            if (freeBytes < neededBytes + 150L * 1024 * 1024) {
+                val freeMb = freeBytes / (1024 * 1024)
+                val needMb = neededBytes / (1024 * 1024)
                 _uiState.update {
                     it.copy(
                         isModelLoaded = false,
-                        statusMessage = "Ошибка при загрузке GGUF модели"
+                        isLoadingModel = false,
+                        statusMessage = "Недостаточно места во внутренней памяти: свободно $freeMb МБ, нужно $needMb МБ"
+                    )
+                }
+                return@launch
+            }
+
+            val cacheFile = File(appFilesDir, "model.gguf")
+            try {
+                _uiState.update {
+                    it.copy(statusMessage = "Копирование модели во внутренний кэш...")
+                }
+
+                contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(cacheFile).use { output ->
+                        val buffer = ByteArray(1024 * 1024)
+                        var bytesCopied = 0L
+                        var lastReportTime = System.currentTimeMillis()
+
+                        var read: Int
+                        while (input.read(buffer).also { read = it } != -1) {
+                            output.write(buffer, 0, read)
+                            bytesCopied += read
+                            val now = System.currentTimeMillis()
+                            if (now - lastReportTime > 600) {
+                                lastReportTime = now
+                                val progress = if (fileSize > 0) " (${(bytesCopied * 100 / fileSize)}%)" else ""
+                                _uiState.update {
+                                    it.copy(statusMessage = "Копирование во внутренний кэш$progress...")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                loadModelInternal(cacheFile.absolutePath, displayName)
+
+            } catch (e: Exception) {
+                if (cacheFile.exists()) cacheFile.delete()
+                _uiState.update {
+                    it.copy(
+                        isModelLoaded = false,
+                        isLoadingModel = false,
+                        statusMessage = "Ошибка кэширования модели: ${e.message}"
                     )
                 }
             }
-            updateRamUsage()
         }
+    }
+
+    private fun loadModelInternal(path: String, displayName: String) {
+        _uiState.update {
+            it.copy(
+                isLoadingModel = true,
+                statusMessage = "Инициализация llama.cpp ($displayName)..."
+            )
+        }
+        updateRamUsage()
+
+        val error = LlamaBridge.nativeLoadModel(
+            path,
+            2048,
+            _uiState.value.threadCount
+        )
+
+        if (error.isEmpty()) {
+            _uiState.update {
+                it.copy(
+                    isModelLoaded = true,
+                    isLoadingModel = false,
+                    modelPath = displayName,
+                    statusMessage = "Модель готова: $displayName"
+                )
+            }
+        } else {
+            _uiState.update {
+                it.copy(
+                    isModelLoaded = false,
+                    isLoadingModel = false,
+                    statusMessage = error
+                )
+            }
+        }
+        updateRamUsage()
+    }
+
+    fun loadModel(filePath: String) {
+        val fileName = File(filePath).name
+        viewModelScope.launch(Dispatchers.IO) {
+            loadModelInternal(filePath, fileName)
+        }
+    }
+
+    private fun queryUriMetadata(contentResolver: ContentResolver, uri: Uri): Pair<String, Long> {
+        var name = "model.gguf"
+        var size = 0L
+        try {
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (cursor.moveToFirst()) {
+                    if (nameIndex != -1) cursor.getString(nameIndex)?.let { name = it }
+                    if (sizeIndex != -1) size = cursor.getLong(sizeIndex)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Ошибка чтения метаданных: ${e.message}")
+        }
+        return Pair(name, size)
     }
 
     fun generateSummary() {
@@ -217,9 +431,12 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
     fun unloadModel() {
         LlamaBridge.nativeUnload()
+        openPfd?.close()
+        openPfd = null
         _uiState.update {
             it.copy(
                 isModelLoaded = false,
+                isLoadingModel = false,
                 modelPath = "",
                 statusMessage = "Модель выгружена из памяти"
             )

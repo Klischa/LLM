@@ -349,13 +349,21 @@ fun DeviceInfoCard(uiState: UiState, viewModel: LLMViewModel) {
                         modifier = Modifier
                             .size(10.dp)
                             .background(
-                                if (uiState.isModelLoaded) Color(0xFF4CAF50) else Color(0xFFFF9800),
+                                when {
+                                    uiState.isModelLoaded -> Color(0xFF4CAF50)
+                                    uiState.isLoadingModel -> Color(0xFF2196F3)
+                                    else -> Color(0xFFFF9800)
+                                },
                                 shape = RoundedCornerShape(5.dp)
                             )
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (uiState.isModelLoaded) "Модель загружена" else "Модель не выбрана",
+                        text = when {
+                            uiState.isModelLoaded -> "Модель: ${uiState.modelPath}"
+                            uiState.isLoadingModel -> "Загрузка..."
+                            else -> "Модель не выбрана"
+                        },
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
                     )
                 }
@@ -365,6 +373,31 @@ fun DeviceInfoCard(uiState: UiState, viewModel: LLMViewModel) {
                     style = MaterialTheme.typography.labelSmall
                 )
             }
+
+            if (uiState.isLoadingModel) {
+                Spacer(modifier = Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Сообщение о статусе или ошибке
+            val isError = !uiState.isModelLoaded && !uiState.isLoadingModel &&
+                          (uiState.statusMessage.contains("Ошибка") ||
+                           uiState.statusMessage.contains("не найден") ||
+                           uiState.statusMessage.contains("поврежден") ||
+                           uiState.statusMessage.contains("Недостаточно"))
+            Text(
+                text = uiState.statusMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = when {
+                    isError -> MaterialTheme.colorScheme.error
+                    uiState.isLoadingModel -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
 
             Spacer(modifier = Modifier.height(6.dp))
 

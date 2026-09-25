@@ -26,7 +26,8 @@ object LlamaBridge {
 
     // Внешние нативные C++ функции
     external fun nativeInit(): Boolean
-    external fun nativeLoadModel(modelPath: String, nCtx: Int, nThreads: Int): Boolean
+    // Возвращает пустую строку при успехе, либо текст ошибки от llama.cpp
+    external fun nativeLoadModel(modelPath: String, nCtx: Int, nThreads: Int): String
     external fun nativeFormatPrompt(systemPrompt: String, userPrompt: String): String
     external fun nativeGenerate(
         prompt: String,
