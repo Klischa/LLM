@@ -53,9 +53,9 @@ jobs:
       - name: Build APK with Gradle
         working-directory: ./android
         run: |
-          ./gradlew assembleRelease --stacktrace 2>&1 | tee build.log || {
-            echo "Release build failed, checking debug build..."
-            ./gradlew assembleDebug --stacktrace 2>&1 | tee build.log || {
+          ./gradlew :app:assembleRelease --stacktrace 2>&1 | tee build.log || {
+            echo "Release build failed, running debug build..."
+            ./gradlew :app:assembleDebug --stacktrace 2>&1 | tee build.log || {
               echo "=== GRADLE BUILD FAILED. LAST 100 LINES OF LOG: ==="
               tail -n 100 build.log
               exit 1
@@ -65,12 +65,18 @@ jobs:
       - name: Locate APK files
         id: find_apk
         run: |
-          APK_PATH=$(find android/app/build/outputs/apk/ -name "*.apk" | head -n 1)
+          echo "Поиск всех сгенерированных APK файлов:"
+          find . -name "*.apk" -type f
+          APK_PATH=$(find . -name "*release*.apk" -type f | head -n 1)
           if [ -z "$APK_PATH" ]; then
-            echo "::error::No APK file found in build outputs!"
+            APK_PATH=$(find . -name "*.apk" -type f | head -n 1)
+          fi
+          if [ -z "$APK_PATH" ]; then
+            echo "::error::Не удалось найти собранный APK!"
+            find android -maxdepth 5 || true
             exit 1
           fi
-          echo "Found APK at: $APK_PATH"
+          echo "Найден APK: $APK_PATH"
           echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
           sha256sum "$APK_PATH" > "${APK_PATH}.sha256"
           echo "apk_sha256=${APK_PATH}.sha256" >> $GITHUB_OUTPUT
