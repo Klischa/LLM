@@ -6,7 +6,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import com.klischa.llmnotes.ui.ChatScreen
 import com.klischa.llmnotes.ui.LLMNotesTheme
@@ -18,7 +18,7 @@ import java.io.FileOutputStream
 
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: LLMViewModel by viewModels()
+    private lateinit var viewModel: LLMViewModel
 
     // Лаунчер выбора файла .gguf из проводника Android
     private val openDocumentLauncher = registerForActivityResult(
@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        viewModel = ViewModelProvider(this)[LLMViewModel::class.java]
         setContent {
             LLMNotesTheme {
                 ChatScreen(

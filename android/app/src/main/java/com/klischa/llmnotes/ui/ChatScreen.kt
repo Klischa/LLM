@@ -15,7 +15,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -33,7 +34,7 @@ fun ChatScreen(
     viewModel: LLMViewModel,
     onSelectModelClick: () -> Unit
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState = viewModel.uiState.collectAsState().value
     val scrollState = rememberScrollState()
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
