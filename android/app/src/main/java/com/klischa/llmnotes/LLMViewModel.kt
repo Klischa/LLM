@@ -183,14 +183,17 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                         updateRamUsage()
                         return@launch
                     } else {
-                        Log.w(TAG, "Не удалось загрузить через FD/прямой путь: $error")
-                        // Если ошибка связана со структурой модели или RAM, копирование не поможет
-                        val isFileAccessError = error.contains("Не удалось открыть") ||
-                                                error.contains("не найден") ||
-                                                error.contains("errno")
-                        if (!isFileAccessError) {
-                            openPfd?.close()
-                            openPfd = null
+                        Log.w(TAG, "Не удалось загрузить напрямую ($pathToUse): $error")
+                        openPfd?.close()
+                        openPfd = null
+
+                        val isFatalModelError = error.contains("unknown model architecture") ||
+                                                error.contains("unsupported") ||
+                                                error.contains("нехватка памяти") ||
+                                                error.contains("out of memory") ||
+                                                error.contains("cannot allocate")
+
+                        if (isFatalModelError) {
                             _uiState.update {
                                 it.copy(
                                     isModelLoaded = false,
@@ -201,8 +204,12 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                             updateRamUsage()
                             return@launch
                         }
-                        openPfd?.close()
-                        openPfd = null
+
+                        _uiState.update {
+                            it.copy(
+                                statusMessage = "Прямой доступ не удался. Проверка места для локального кэша..."
+                            )
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -221,7 +228,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         isModelLoaded = false,
                         isLoadingModel = false,
-                        statusMessage = "Недостаточно места во внутренней памяти: свободно $freeMb МБ, нужно $needMb МБ"
+                        statusMessage = "Прямой доступ отклонен ОС. Для кэша свободно $freeMb МБ, нужно $needMb МБ."
                     )
                 }
                 return@launch

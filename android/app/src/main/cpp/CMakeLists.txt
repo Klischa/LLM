@@ -40,10 +40,12 @@ target_include_directories(llama-android PRIVATE
 
 find_library(log-lib log)
 find_library(android-lib android)
+find_library(dl-lib dl)
 
 target_link_libraries(llama-android
     llama
     ggml
     ${log-lib}
     ${android-lib}
+    ${dl-lib}
 )
