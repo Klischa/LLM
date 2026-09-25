@@ -29,18 +29,22 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.6'
+          cache-disabled: true
 
-      - name: Set up Android SDK and NDK
-        uses: android-actions/setup-android@v3
-
-      - name: Configure Android SDK and NDK paths
+      - name: Configure Android SDK and Accept Licenses
         run: |
           echo "sdk.dir=${ANDROID_HOME}" > android/local.properties
+          yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          # Проверяем наличие NDK 26.1
           if [ -d "${ANDROID_HOME}/ndk/26.1.10909125" ]; then
             echo "ndk.dir=${ANDROID_HOME}/ndk/26.1.10909125" >> android/local.properties
             echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/26.1.10909125" >> $GITHUB_ENV
           else
             yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1" || true
+            if [ -d "${ANDROID_HOME}/ndk/26.1.10909125" ]; then
+              echo "ndk.dir=${ANDROID_HOME}/ndk/26.1.10909125" >> android/local.properties
+              echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/26.1.10909125" >> $GITHUB_ENV
+            fi
           fi
 
       - name: Make gradlew executable
