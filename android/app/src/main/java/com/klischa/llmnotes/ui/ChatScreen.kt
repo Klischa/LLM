@@ -45,11 +45,11 @@ fun ChatScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Офлайн LLM Ассистент",
+                            text = "LLM",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            text = "Infinix Note 30 • Helio G99",
+                            text = "Офлайн ассистент • Helio G99",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

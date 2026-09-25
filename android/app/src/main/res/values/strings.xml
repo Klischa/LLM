@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">LLM Заметки (Qwen2.5)</string>
+    <string name="app_name">LLM</string>
     <string name="load_model">Загрузить модель GGUF</string>
     <string name="model_not_loaded">Модель не загружена</string>
     <string name="model_loaded">Модель готова к работе</string>
