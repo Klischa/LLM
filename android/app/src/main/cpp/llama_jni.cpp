@@ -109,6 +109,57 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeUnload(JNIEnv *env, jobject thiz) {
 }
 
 JNIEXPORT jstring JNICALL
+Java_com_klischa_llmnotes_LlamaBridge_nativeFormatPrompt(
+    JNIEnv *env,
+    jobject thiz,
+    jstring system_prompt_str,
+    jstring user_prompt_str
+) {
+    if (!g_model) return user_prompt_str;
+
+    const char *sys_ptr = system_prompt_str ? env->GetStringUTFChars(system_prompt_str, nullptr) : nullptr;
+    const char *usr_ptr = user_prompt_str ? env->GetStringUTFChars(user_prompt_str, nullptr) : nullptr;
+
+    std::string sys_str = sys_ptr ? sys_ptr : "";
+    std::string usr_str = usr_ptr ? usr_ptr : "";
+
+    if (sys_ptr) env->ReleaseStringUTFChars(system_prompt_str, sys_ptr);
+    if (usr_ptr) env->ReleaseStringUTFChars(user_prompt_str, usr_ptr);
+
+    std::vector<llama_chat_message> chat;
+    if (!sys_str.empty()) {
+        chat.push_back({"system", sys_str.c_str()});
+    }
+    if (!usr_str.empty()) {
+        chat.push_back({"user", usr_str.c_str()});
+    }
+
+    if (chat.empty()) {
+        return env->NewStringUTF("");
+    }
+
+    // 1. Попытка применить встроенный шаблон модели из метаданных GGUF
+    int32_t req_len = llama_chat_apply_template(g_model, nullptr, chat.data(), chat.size(), true, nullptr, 0);
+
+    if (req_len > 0) {
+        std::vector<char> buf(req_len + 1, 0);
+        int32_t res_len = llama_chat_apply_template(g_model, nullptr, chat.data(), chat.size(), true, buf.data(), buf.size());
+        if (res_len > 0) {
+            return env->NewStringUTF(std::string(buf.data(), res_len).c_str());
+        }
+    }
+
+    // 2. Универсальный фоллбэк ChatML
+    std::string fallback = "";
+    if (!sys_str.empty()) {
+        fallback += "<|im_start|>system\n" + sys_str + "<|im_end|>\n";
+    }
+    fallback += "<|im_start|>user\n" + usr_str + "<|im_end|>\n<|im_start|>assistant\n";
+
+    return env->NewStringUTF(fallback.c_str());
+}
+
+JNIEXPORT jstring JNICALL
 Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
     JNIEnv *env,
     jobject thiz,

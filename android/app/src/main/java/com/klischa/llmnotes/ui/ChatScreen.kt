@@ -3,7 +3,9 @@
 package com.klischa.llmnotes.ui
 
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -12,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
@@ -27,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.klischa.llmnotes.LLMViewModel
+import com.klischa.llmnotes.SystemPromptPreset
 import com.klischa.llmnotes.UiState
 
 @Composable
@@ -89,7 +93,10 @@ fun ChatScreen(
             // 1. Панель мониторинга устройства и статуса
             DeviceInfoCard(uiState, viewModel)
 
-            // 2. Вкладки режима работы
+            // 2. Настройка универсального системного промпта
+            SystemPromptCard(uiState, viewModel)
+
+            // 3. Вкладки режима работы
             TabRow(selectedTabIndex = uiState.selectedTab) {
                 Tab(
                     selected = uiState.selectedTab == 0,
@@ -103,7 +110,7 @@ fun ChatScreen(
                 )
             }
 
-            // 3. Поле ввода текста (заметка или вопрос)
+            // 4. Поле ввода текста (заметка или вопрос)
             OutlinedTextField(
                 value = uiState.inputText,
                 onValueChange = { viewModel.updateInputText(it) },
@@ -125,7 +132,7 @@ fun ChatScreen(
                 shape = RoundedCornerShape(12.dp)
             )
 
-            // 4. Панель быстрых действий для заметок
+            // 5. Панель быстрых действий для заметок
             if (uiState.selectedTab == 0) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -181,7 +188,7 @@ fun ChatScreen(
                 }
             }
 
-            // 5. Карточка результата
+            // 6. Карточка результата
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -246,6 +253,78 @@ fun ChatScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+@Composable
+fun SystemPromptCard(uiState: UiState, viewModel: LLMViewModel) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { viewModel.toggleSystemPromptExpanded() },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Системный промпт (Универсальный)",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+
+                Text(
+                    text = if (uiState.isSystemPromptExpanded) "Скрыть ▲" else "Изменить ▼",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            AnimatedVisibility(visible = uiState.isSystemPromptExpanded) {
+                Column(modifier = Modifier.padding(top = 8.dp)) {
+                    // Пресеты
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        SystemPromptPreset.values().forEach { preset ->
+                            FilterChip(
+                                selected = uiState.systemPrompt == preset.prompt,
+                                onClick = { viewModel.applyPreset(preset) },
+                                label = { Text(preset.title, fontSize = 11.sp) },
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    OutlinedTextField(
+                        value = uiState.systemPrompt,
+                        onValueChange = { viewModel.updateSystemPrompt(it) },
+                        label = { Text("Инструкция поведения (для любых моделей GGUF)", fontSize = 11.sp) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 80.dp, max = 160.dp),
+                        textStyle = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
         }
     }
 }

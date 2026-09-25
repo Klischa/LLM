@@ -4,8 +4,8 @@ import android.util.Log
 
 /**
  * JNI-мост для взаимодействия с C++ библиотекой llama.cpp.
- * Обеспечивает загрузку GGUF-моделей, потоковую генерацию токенов
- * и аппаратную оптимизацию под процессор Helio G99.
+ * Поддерживает автоопределение встроенных шаблонов чата моделей GGUF
+ * (Llama-3, Qwen, Gemma, Mistral, Phi и др.) и потоковую генерацию.
  */
 object LlamaBridge {
     private const val TAG = "LlamaBridge"
@@ -27,6 +27,7 @@ object LlamaBridge {
     // Внешние нативные C++ функции
     external fun nativeInit(): Boolean
     external fun nativeLoadModel(modelPath: String, nCtx: Int, nThreads: Int): Boolean
+    external fun nativeFormatPrompt(systemPrompt: String, userPrompt: String): String
     external fun nativeGenerate(
         prompt: String,
         maxTokens: Int,

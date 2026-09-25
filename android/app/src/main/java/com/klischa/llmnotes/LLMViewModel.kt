@@ -9,7 +9,30 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+
+enum class SystemPromptPreset(val title: String, val prompt: String) {
+    UNIVERSAL(
+        "Универсальный",
+        "Ты — умный, точный и лаконичный русскоязычный персональный ассистент. " +
+        "Твоя задача — отвечать на вопросы понятно и по существу, помогать работать с заметками, " +
+        "делать емкие пересказы и структурировать информацию без лишней 'воды'."
+    ),
+    CONCISE(
+        "Кратко",
+        "Ты — редактор-аналитик. Отвечай предельно кратко, тезисно и строго по делу. " +
+        "Выделяй только главные факты, даты и выводы. Никаких пустых приветствий и вводных слов."
+    ),
+    TASKS(
+        "Задачи",
+        "Ты — менеджер задач. Анализируй текст и формируй структурированный список конкретных действий " +
+        "(Action Items) с чекбоксами [ ] и дедлайнами."
+    ),
+    DIALOG(
+        "Диалог",
+        "Ты — эрудированный, дружелюбный и внимательный собеседник. Отвечай развернуто, " +
+        "живым языком, приводи примеры и рассуждай логично."
+    )
+}
 
 data class UiState(
     val isModelLoaded: Boolean = false,
@@ -17,12 +40,14 @@ data class UiState(
     val isGenerating: Boolean = false,
     val inputText: String = "",
     val outputText: String = "",
+    val systemPrompt: String = SystemPromptPreset.UNIVERSAL.prompt,
+    val isSystemPromptExpanded: Boolean = false,
     val statusMessage: String = "Выберите модель GGUF в памяти смартфона",
     val tokensPerSecond: Float = 0.0f,
     val totalTokensGenerated: Int = 0,
     val generationTimeSeconds: Float = 0.0f,
     val allocatedRamMb: Long = 0,
-    val threadCount: Int = 2, // Оптимум 2 ядра A76 для Helio G99
+    val threadCount: Int = 2, // Оптимум 2 ядра Cortex-A76 для Helio G99
     val temperature: Float = 0.3f,
     val topP: Float = 0.85f,
     val selectedTab: Int = 0 // 0: Заметки и саммари, 1: Вопрос-ответ
@@ -33,14 +58,20 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
-    private val systemPrompt = (
-        "Ты — умный и лаконичный русскоязычный офлайн-ассистент для смартфона Infinix Note 30. " +
-        "Твоя задача — помогать пользователю работать с заметками, отвечать на вопросы точно и без " +
-        "лишней 'воды', делать краткие пересказы и структурировать информацию."
-    )
-
     fun updateInputText(text: String) {
         _uiState.update { it.copy(inputText = text) }
+    }
+
+    fun updateSystemPrompt(newPrompt: String) {
+        _uiState.update { it.copy(systemPrompt = newPrompt) }
+    }
+
+    fun applyPreset(preset: SystemPromptPreset) {
+        _uiState.update { it.copy(systemPrompt = preset.prompt) }
+    }
+
+    fun toggleSystemPromptExpanded() {
+        _uiState.update { it.copy(isSystemPromptExpanded = !it.isSystemPromptExpanded) }
     }
 
     fun setSelectedTab(index: Int) {
@@ -116,14 +147,11 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
     private fun runPrompt(userPrompt: String) {
         if (!_uiState.value.isModelLoaded || _uiState.value.isGenerating) return
 
-        // Формирование ChatML промпта под формат Qwen2.5
-        val chatMlPrompt = buildString {
-            append("<|im_start|>system\n")
-            append(systemPrompt)
-            append("<|im_end|>\n<|im_start|>user\n")
-            append(userPrompt)
-            append("<|im_end|>\n<|im_start|>assistant\n")
-        }
+        // Автоматическое форматирование промпта под архитектуру загруженной GGUF модели
+        val formattedPrompt = LlamaBridge.nativeFormatPrompt(
+            _uiState.value.systemPrompt,
+            userPrompt
+        )
 
         viewModelScope.launch(Dispatchers.Default) {
             _uiState.update {
@@ -155,7 +183,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             LlamaBridge.nativeGenerate(
-                chatMlPrompt,
+                formattedPrompt,
                 512,
                 _uiState.value.temperature,
                 _uiState.value.topP,
