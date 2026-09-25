@@ -33,10 +33,15 @@ jobs:
       - name: Set up Android SDK and NDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android NDK and CMake
+      - name: Configure Android SDK and NDK paths
         run: |
-          echo "y" | sudo ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1"
-          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/26.1.10909125" >> $GITHUB_ENV
+          echo "sdk.dir=${ANDROID_HOME}" > android/local.properties
+          if [ -d "${ANDROID_HOME}/ndk/26.1.10909125" ]; then
+            echo "ndk.dir=${ANDROID_HOME}/ndk/26.1.10909125" >> android/local.properties
+            echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/26.1.10909125" >> $GITHUB_ENV
+          else
+            yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1" || true
+          fi
 
       - name: Make gradlew executable
         run: |
@@ -59,6 +64,12 @@ jobs:
           echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
           sha256sum "$APK_PATH" > "${APK_PATH}.sha256"
           echo "apk_sha256=${APK_PATH}.sha256" >> $GITHUB_OUTPUT
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LLMNotes-APK
+          path: ${{ steps.find_apk.outputs.apk_path }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
