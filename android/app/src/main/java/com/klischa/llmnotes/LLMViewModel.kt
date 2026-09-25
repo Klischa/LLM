@@ -61,9 +61,9 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
             updateRamUsage()
 
             val success = LlamaBridge.nativeLoadModel(
-                model_path = filePath,
-                n_ctx = 2048,
-                n_threads = _uiState.value.threadCount
+                filePath,
+                2048,
+                _uiState.value.threadCount
             )
 
             if (success) {
@@ -155,11 +155,11 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             LlamaBridge.nativeGenerate(
-                prompt = chatMlPrompt,
-                maxTokens = 512,
-                temperature = _uiState.value.temperature,
-                topP = _uiState.value.topP,
-                callback = callback
+                chatMlPrompt,
+                512,
+                _uiState.value.temperature,
+                _uiState.value.topP,
+                callback
             )
 
             val totalElapsed = (System.currentTimeMillis() - startTime) / 1000f
