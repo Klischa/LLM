@@ -407,10 +407,12 @@ fun EmptyChatPlaceholder(
                 )
 
                 val suggestions = listOf(
-                    "📝 Сделай краткое резюме текста...",
+                    "📸 Сколько фото сохранено на моем телефоне?",
+                    "💾 Сколько свободно памяти на устройстве?",
+                    "🔋 Какой текущий уровень заряда аккумулятора?",
+                    "📝 Сделай краткое резюме заметки...",
                     "✅ Составь список задач (Action Items)...",
-                    "💡 Объясни простыми словами квантовую физику",
-                    "✨ Отредактируй и красиво оформи заметку..."
+                    "💡 Объясни простыми словами квантовую физику"
                 )
 
                 suggestions.forEach { suggestion ->
@@ -537,6 +539,34 @@ fun QuickPromptChips(
             .padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
+        item {
+            SuggestionChip(
+                onClick = { onChipClick("photos") },
+                label = { Text("📸 Сколько фото?", fontSize = 11.sp) },
+                enabled = isModelLoaded
+            )
+        }
+        item {
+            SuggestionChip(
+                onClick = { onChipClick("storage") },
+                label = { Text("💾 Память", fontSize = 11.sp) },
+                enabled = isModelLoaded
+            )
+        }
+        item {
+            SuggestionChip(
+                onClick = { onChipClick("battery") },
+                label = { Text("🔋 Батарея", fontSize = 11.sp) },
+                enabled = isModelLoaded
+            )
+        }
+        item {
+            SuggestionChip(
+                onClick = { onChipClick("device") },
+                label = { Text("📱 Телефон", fontSize = 11.sp) },
+                enabled = isModelLoaded
+            )
+        }
         item {
             SuggestionChip(
                 onClick = { onChipClick("summary") },

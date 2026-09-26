@@ -398,10 +398,28 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         val rolesList = mutableListOf<String>()
         val contentsList = mutableListOf<String>()
 
-        // 1. Системный промпт
-        if (_uiState.value.systemPrompt.isNotBlank()) {
+        // 1. Системный промпт и контекст телеметрии устройства (Device Tools)
+        val baseSysPrompt = _uiState.value.systemPrompt.trim()
+        val telemetryContext = if (DeviceTools.isDeviceQuery(prompt)) {
+            try {
+                DeviceTools.buildTelemetryContext(getApplication())
+            } catch (e: Exception) {
+                Log.w(TAG, "Ошибка сбора телеметрии: ${e.message}")
+                ""
+            }
+        } else {
+            ""
+        }
+
+        val effectiveSysPrompt = when {
+            baseSysPrompt.isNotEmpty() && telemetryContext.isNotEmpty() -> "$baseSysPrompt\n\n$telemetryContext"
+            telemetryContext.isNotEmpty() -> telemetryContext
+            else -> baseSysPrompt
+        }
+
+        if (effectiveSysPrompt.isNotBlank()) {
             rolesList.add("system")
-            contentsList.add(_uiState.value.systemPrompt.trim())
+            contentsList.add(effectiveSysPrompt)
         }
 
         // 2. История предыдущих реплик
@@ -501,15 +519,28 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun insertNotePrompt(type: String) {
-        val prefix = when (type) {
+        val query = when (type) {
+            "photos" -> "Сколько фото и видео сохранено на моем телефоне?"
+            "storage" -> "Сколько свободно памяти на моем телефоне?"
+            "battery" -> "Какой текущий уровень заряда аккумулятора и температура?"
+            "device" -> "Какие характеристики, модель и параметры у моего телефона?"
             "summary" -> "Сделай краткое структурированное резюме следующего текста:\n\n"
             "tasks" -> "Выдели четкий список задач (Action Items) с чекбоксами [ ] из следующего текста:\n\n"
             "format" -> "Отредактируй и красиво структурируй текст в формате Markdown:\n\n"
             "explain" -> "Объясни простыми словами следующую тему:\n\n"
             else -> ""
         }
-        _uiState.update {
-            it.copy(inputText = prefix + it.inputText)
+
+        if (type in listOf("photos", "storage", "battery", "device")) {
+            if (_uiState.value.inputText.isBlank() && _uiState.value.isModelLoaded && !_uiState.value.isGenerating) {
+                sendMessage(query)
+            } else {
+                _uiState.update { it.copy(inputText = query) }
+            }
+        } else {
+            _uiState.update {
+                it.copy(inputText = query + it.inputText)
+            }
         }
     }
 

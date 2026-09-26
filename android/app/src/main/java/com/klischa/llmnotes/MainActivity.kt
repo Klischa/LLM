@@ -33,11 +33,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Запрос разрешений на чтение медиа (фото/видео) для Device Tools
+    private val requestMediaPermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        // Телеметрия обновится автоматически при первом обращении
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel = ViewModelProvider(this)[LLMViewModel::class.java]
 
-        // Запрос разрешения доступа ко всем файлам для прямого zero-copy чтения моделей
+        // 1. Запрос доступа к медиафайлам (для работы с фото/видео)
+        requestMediaPermissions()
+
+        // 2. Запрос разрешения доступа ко всем файлам для прямого zero-copy чтения моделей
         checkAndRequestAllFilesAccess()
 
         setContent {
@@ -50,6 +60,23 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    private fun requestMediaPermissions() {
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(
+                android.Manifest.permission.READ_MEDIA_IMAGES,
+                android.Manifest.permission.READ_MEDIA_VIDEO,
+                android.Manifest.permission.READ_MEDIA_AUDIO
+            )
+        } else {
+            arrayOf(
+                android.Manifest.permission.READ_EXTERNAL_STORAGE
+            )
+        }
+        try {
+            requestMediaPermissionsLauncher.launch(permissions)
+        } catch (_: Exception) {}
     }
 
     private fun checkAndRequestAllFilesAccess() {
