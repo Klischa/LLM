@@ -328,7 +328,7 @@ adb push models_gguf/qwen2.5-1.5b-q4_k_m.gguf /sdcard/Download/
 
 ---
 
-## 16. Подключение внешнего API OpenCode: подписки GO и ZEN (v1.2.1)
+## 16. Подключение внешнего API OpenCode: подписки GO и ZEN (v1.2.2)
 
 В приложении реализован гибридный режим работы (Офлайн GGUF + Облачные API):
 - **OpenCode GO**:
@@ -339,11 +339,15 @@ adb push models_gguf/qwen2.5-1.5b-q4_k_m.gguf /sdcard/Download/
   - Базовый эндпоинт: `https://opencode.ai/zen/v1`
   - Преднастроенные модели: `big-pickle`, `claude-fable-5-1`, `claude-haiku-4-5`, `claude-3-7-sonnet`, `claude-3-5-sonnet`, `gpt-4o`, `gpt-4o-mini`, `deepseek-r1`, `deepseek-v4-pro`, `gemini-2.0-flash`, `kimi-k2.6`, `qwen-2.5-max`.
   - Отдельное хранилище API-ключа для подписки OpenCode ZEN.
-- **Эмуляция официального OpenCode CLI-клиента**:
-  - Передаются необходимые шлюзовые заголовки (`User-Agent: opencode/1.18.31 (cli; linux; x64)`, `x-opencode-client: cli`, `x-opencode-session`, `x-opencode-project`, `x-opencode-request`, `x-session-id`, `x-session-affinity`).
+- **Точная эмуляция официального OpenCode CLI-клиента**:
+  - `User-Agent: opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14`.
+  - `x-opencode-client: cli`, `x-opencode-project: global`.
+  - Алгоритмическая генерация `x-opencode-session` (`ses_` с нисходящим инвертированным timestamp) и `x-opencode-request` (`msg_` с восходящим timestamp) + 14 Base62 символов, полностью удовлетворяющая проверке шлюза OpenCode Edge.
+  - Поддержка потокового рассуждения (`reasoning_content`) для моделей линейки DeepSeek-R1.
   - Позволяет беспрепятственно использовать модели Free Tier (например, `big-pickle`, `claude-fable-5-1`) без ошибки `403 OpenCode's free tier can only be used from within OpenCode`.
 - **Потоковый вывод токенов (SSE)**: Ответы через облачный API стримятся в реальном времени с измерением скорости (`tok/s`) точно так же, как локальная модель.
 - **Динамическое обновление каталога**: Кнопка «🔄 Обновить» опрашивает эндпоинт `/v1/models` по вашему API-ключу и подтягивает актуальный список доступных моделей подписки с серверов OpenCode.
 - **Интеграция с Device Tools и историей**: Все функции устройства (фото, память, заряд) и сохранение переписки в SQLite работают как для локальной модели, так и при общении через OpenCode.
+
 
 

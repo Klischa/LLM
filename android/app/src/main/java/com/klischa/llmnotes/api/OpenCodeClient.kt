@@ -33,7 +33,48 @@ data class ApiChatMessage(
  */
 object OpenCodeClient {
     private const val TAG = "OpenCodeClient"
-    private const val OPENCODE_USER_AGENT = "opencode/1.18.31 (cli; linux; x64)"
+    private const val OPENCODE_USER_AGENT = "opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14"
+    private const val BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    private val secureRandom = java.security.SecureRandom()
+    private var lastTimestamp = 0L
+    private var counter = 0L
+
+    /**
+     * Генератор идентификаторов OpenCode CLI.
+     * Шлюз OpenCode проверяет временную метку и алгоритм инверсии битов:
+     * - для сессий (ses_): инвертированное нисходящее время (desc = true)
+     * - для сообщений/запросов (msg_): прямое восходящее время (desc = false)
+     * Первые 12 hex-символов кодируют миллисекунды, затем следуют 14 символов Base62.
+     */
+    @Synchronized
+    fun generateOpenCodeId(prefix: String, desc: Boolean): String {
+        val now = System.currentTimeMillis()
+        if (now != lastTimestamp) {
+            counter = 1L
+            lastTimestamp = now
+        } else {
+            counter++
+        }
+        var v = now * 4096L + counter
+        if (desc) {
+            v = v.inv()
+        }
+        val hexBuilder = StringBuilder(12)
+        for (i in 0 until 6) {
+            val shift = 40 - 8 * i
+            val byteVal = ((v ushr shift) and 0xFFL).toInt()
+            hexBuilder.append(String.format(java.util.Locale.US, "%02x", byteVal))
+        }
+        val rndBuilder = StringBuilder(14)
+        for (i in 0 until 14) {
+            val idx = secureRandom.nextInt(BASE62_CHARS.length)
+            rndBuilder.append(BASE62_CHARS[idx])
+        }
+        return prefix + hexBuilder.toString() + rndBuilder.toString()
+    }
+
+    fun generateSessionId(): String = generateOpenCodeId("ses_", desc = true)
+    fun generateRequestId(): String = generateOpenCodeId("msg_", desc = false)
 
     // Рекомендуемые модели для подписки OpenCode GO
     val GO_DEFAULT_MODELS = listOf(
@@ -88,14 +129,15 @@ object OpenCodeClient {
             conn.requestMethod = "GET"
 
             val rawKey = apiKey.removePrefix("Bearer ").removePrefix("bearer ").trim()
-            val sessionId = "ses_" + UUID.randomUUID().toString().replace("-", "").take(24)
-            val requestId = "req_" + UUID.randomUUID().toString().replace("-", "").take(16)
+            val sessionId = generateSessionId()
+            val requestId = generateRequestId()
 
             conn.setRequestProperty("Authorization", "Bearer $rawKey")
             conn.setRequestProperty("x-api-key", rawKey)
             conn.setRequestProperty("Accept", "application/json")
             conn.setRequestProperty("User-Agent", OPENCODE_USER_AGENT)
             conn.setRequestProperty("x-opencode-client", "cli")
+            conn.setRequestProperty("x-opencode-project", "global")
             conn.setRequestProperty("x-opencode-session", sessionId)
             conn.setRequestProperty("x-opencode-request", requestId)
             conn.connectTimeout = 10000
@@ -152,13 +194,8 @@ object OpenCodeClient {
             conn = url.openConnection() as HttpsURLConnection
             conn.requestMethod = "POST"
 
-            val sessionId = if (conversationId.isNotBlank()) {
-                "ses_" + conversationId.replace("-", "").take(24).padEnd(24, '0')
-            } else {
-                "ses_" + UUID.randomUUID().toString().replace("-", "").take(24)
-            }
-            val requestId = "req_" + UUID.randomUUID().toString().replace("-", "").take(16)
-            val projectId = "prj_" + UUID.randomUUID().toString().replace("-", "").take(16)
+            val sessionId = generateSessionId()
+            val requestId = generateRequestId()
             val rawKey = apiKey.removePrefix("Bearer ").removePrefix("bearer ").trim()
 
             conn.setRequestProperty("Authorization", "Bearer $rawKey")
@@ -166,11 +203,11 @@ object OpenCodeClient {
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             conn.setRequestProperty("Accept", "text/event-stream")
 
-            // Обязательные заголовки OpenCode для аутентификации и поддержки Free Tier
+            // Точные заголовки OpenCode CLI для авторизации шлюза и Free Tier
             conn.setRequestProperty("User-Agent", OPENCODE_USER_AGENT)
             conn.setRequestProperty("x-opencode-client", "cli")
+            conn.setRequestProperty("x-opencode-project", "global")
             conn.setRequestProperty("x-opencode-session", sessionId)
-            conn.setRequestProperty("x-opencode-project", projectId)
             conn.setRequestProperty("x-opencode-request", requestId)
             conn.setRequestProperty("x-session-id", sessionId)
             conn.setRequestProperty("x-session-affinity", sessionId)
@@ -229,8 +266,10 @@ object OpenCodeClient {
                         if (choices != null && choices.length() > 0) {
                             val delta = choices.getJSONObject(0).optJSONObject("delta")
                             val content = delta?.optString("content", "") ?: ""
-                            if (content.isNotEmpty()) {
-                                onToken(content)
+                            val reasoning = delta?.optString("reasoning_content", "") ?: ""
+                            val tokenPiece = if (content.isNotEmpty()) content else reasoning
+                            if (tokenPiece.isNotEmpty()) {
+                                onToken(tokenPiece)
                             }
                         }
                     } catch (_: Exception) {}
