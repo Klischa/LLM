@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -47,8 +48,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.klischa.llmnotes.ChatMessage
+import com.klischa.llmnotes.FileStorageManager
 import com.klischa.llmnotes.LLMViewModel
 import com.klischa.llmnotes.MessageRole
+import com.klischa.llmnotes.R
 import com.klischa.llmnotes.SystemPromptPreset
 import com.klischa.llmnotes.UiState
 import com.klischa.llmnotes.api.LLMProviderType
@@ -61,7 +64,8 @@ import java.util.Locale
 @Composable
 fun ChatScreen(
     viewModel: LLMViewModel,
-    onSelectModelClick: () -> Unit
+    onSelectModelClick: () -> Unit,
+    onAttachFileClick: () -> Unit = {}
 ) {
     val uiState = viewModel.uiState.collectAsState().value
     val listState = rememberLazyListState()
@@ -353,12 +357,14 @@ fun ChatScreen(
                     onChipClick = { type -> viewModel.insertNotePrompt(type) }
                 )
 
-                // 5. Поле ввода сообщения и кнопка отправки/остановки
+                // 5. Поле ввода сообщения и кнопка отправки/остановки со скрепкой
                 ChatInputBar(
                     uiState = uiState,
                     onInputTextChange = { viewModel.updateInputText(it) },
                     onSendClick = { viewModel.sendMessage() },
-                    onStopClick = { viewModel.stopGeneration() }
+                    onStopClick = { viewModel.stopGeneration() },
+                    onAttachFileClick = onAttachFileClick,
+                    onRemoveAttachmentClick = { viewModel.clearAttachment() }
                 )
             }
         }
@@ -843,6 +849,10 @@ fun ChatMessageBubble(
     val isUser = message.role == MessageRole.USER
     val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
     val timeStr = timeFormat.format(Date(message.timestamp))
+    val context = LocalContext.current
+    val codeBlocks = remember(message.text) {
+        if (!isUser) FileStorageManager.extractCodeBlocks(message.text) else emptyList()
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -884,6 +894,84 @@ fun ChatMessageBubble(
                             MaterialTheme.colorScheme.onSurfaceVariant
                         }
                     )
+                }
+
+                // Кнопки скачивания и копирования для каждого найденного блока кода
+                if (!isUser && codeBlocks.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    codeBlocks.forEach { block ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 3.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = block.language.uppercase(),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = block.suggestedFilename,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            FileStorageManager.copyToClipboard(context, block.code)
+                                            Toast.makeText(context, "Код скопирован", Toast.LENGTH_SHORT).show()
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(id = R.drawable.ic_copy),
+                                            contentDescription = "Скопировать",
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Скопировать", fontSize = 10.sp)
+                                    }
+                                    Button(
+                                        onClick = {
+                                            val saved = FileStorageManager.saveCodeToDownloads(
+                                                context,
+                                                block.code,
+                                                block.suggestedFilename,
+                                                block.language
+                                            )
+                                            Toast.makeText(context, "📥 Код сохранен: Download/${saved.name}", Toast.LENGTH_LONG).show()
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(id = R.drawable.ic_download),
+                                            contentDescription = "Скачать код",
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Скачать код", fontSize = 10.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -1004,75 +1092,128 @@ fun ChatInputBar(
     uiState: UiState,
     onInputTextChange: (String) -> Unit,
     onSendClick: () -> Unit,
-    onStopClick: () -> Unit
+    onStopClick: () -> Unit,
+    onAttachFileClick: () -> Unit,
+    onRemoveAttachmentClick: () -> Unit
 ) {
     val isReady = uiState.isReadyToChat
+    val attached = uiState.attachedDoc
 
     Surface(
         tonalElevation = 2.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedTextField(
-                value = uiState.inputText,
-                onValueChange = onInputTextChange,
-                placeholder = {
-                    Text(
-                        if (isReady) "Сообщение ассистенту..."
-                        else if (uiState.providerType == LLMProviderType.LOCAL_GGUF) "Сначала выберите модель GGUF..."
-                        else "Укажите API-ключ ${uiState.providerType.displayName}..."
-                    )
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 52.dp, max = 130.dp),
-                shape = RoundedCornerShape(22.dp),
-                enabled = isReady && !uiState.isGenerating
-            )
-
-            if (uiState.isGenerating) {
-                IconButton(
-                    onClick = onStopClick,
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Превью прикрепленного файла над строкой ввода
+            if (attached != null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
+                    shape = RoundedCornerShape(8.dp),
                     modifier = Modifier
-                        .size(48.dp)
-                        .background(MaterialTheme.colorScheme.errorContainer, CircleShape)
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_attach),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "${attached.name} (${attached.sizeBytes / 1024} КБ)",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                maxLines = 1
+                            )
+                        }
+                        IconButton(onClick = onRemoveAttachmentClick, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Удалить вложение", modifier = Modifier.size(14.dp))
+                        }
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // Кнопка скрепки (прикрепление текстовых файлов)
+                IconButton(
+                    onClick = onAttachFileClick,
+                    enabled = isReady && !uiState.isGenerating,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .align(Alignment.CenterVertically)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Остановить",
-                        tint = MaterialTheme.colorScheme.onErrorContainer
+                        painter = painterResource(id = R.drawable.ic_attach),
+                        contentDescription = "Прикрепить файл",
+                        tint = if (attached != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-            } else {
-                IconButton(
-                    onClick = onSendClick,
-                    enabled = isReady && uiState.inputText.isNotBlank(),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .background(
-                            if (isReady && uiState.inputText.isNotBlank()) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            },
-                            CircleShape
+
+                OutlinedTextField(
+                    value = uiState.inputText,
+                    onValueChange = onInputTextChange,
+                    placeholder = {
+                        Text(
+                            if (isReady) "Сообщение или путь к файлу..."
+                            else if (uiState.providerType == LLMProviderType.LOCAL_GGUF) "Сначала выберите модель GGUF..."
+                            else "Укажите API-ключ ${uiState.providerType.displayName}..."
                         )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Send,
-                        contentDescription = "Отправить",
-                        tint = if (isReady && uiState.inputText.isNotBlank()) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        }
-                    )
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 52.dp, max = 130.dp),
+                    shape = RoundedCornerShape(22.dp),
+                    enabled = isReady && !uiState.isGenerating
+                )
+
+                if (uiState.isGenerating) {
+                    IconButton(
+                        onClick = onStopClick,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(MaterialTheme.colorScheme.errorContainer, CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Остановить",
+                            tint = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = onSendClick,
+                        enabled = isReady && (uiState.inputText.isNotBlank() || uiState.attachedDoc != null),
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(
+                                if (isReady && (uiState.inputText.isNotBlank() || uiState.attachedDoc != null))
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.surfaceVariant,
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Send,
+                            contentDescription = "Отправить",
+                            tint = if (isReady && (uiState.inputText.isNotBlank() || uiState.attachedDoc != null))
+                                MaterialTheme.colorScheme.onPrimary
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
                 }
             }
         }

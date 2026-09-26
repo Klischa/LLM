@@ -60,12 +60,20 @@ enum class SystemPromptPreset(val title: String, val prompt: String) {
     )
 }
 
+data class AttachedDoc(
+    val name: String,
+    val sizeBytes: Long,
+    val content: String,
+    val path: String? = null
+)
+
 data class UiState(
     val isModelLoaded: Boolean = false,
     val isLoadingModel: Boolean = false,
     val modelPath: String = "",
     val isGenerating: Boolean = false,
     val inputText: String = "",
+    val attachedDoc: AttachedDoc? = null,
     val messages: List<ChatMessage> = emptyList(),
     val currentChatId: String = "",
     val chatSessions: List<com.klischa.llmnotes.data.ChatSession> = emptyList(),
@@ -431,7 +439,25 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         openPfd?.close()
         openPfd = null
+        LlamaBridge.isModelLoaded = false
         LlamaBridge.nativeUnload()
+    }
+
+    fun attachFile(name: String, sizeBytes: Long, content: String, path: String? = null) {
+        _uiState.update {
+            it.copy(
+                attachedDoc = AttachedDoc(name, sizeBytes, content, path),
+                statusMessage = "Файл '$name' прикреплен к запросу"
+            )
+        }
+    }
+
+    fun clearAttachment() {
+        _uiState.update { it.copy(attachedDoc = null) }
+    }
+
+    fun saveCodeBlock(code: String, suggestedName: String? = null, language: String? = null): File {
+        return FileStorageManager.saveCodeToDownloads(getApplication(), code, suggestedName, language)
     }
 
     fun updateInputText(text: String) {
@@ -520,6 +546,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                     )
 
                     if (error.isEmpty()) {
+                        LlamaBridge.isModelLoaded = true
                         val direct = if (File(pathToUse).exists() && File(pathToUse).length() > 0) pathToUse else null
                         saveLastModelInfo(direct, uri.toString(), displayName)
                         _uiState.update {
@@ -645,6 +672,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         if (error.isEmpty()) {
+            LlamaBridge.isModelLoaded = true
             saveLastModelInfo(path, null, displayName)
             _uiState.update {
                 it.copy(
@@ -809,9 +837,21 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // 3. Текущее сообщение пользователя
+        // 3. Текущее сообщение пользователя с проверкой вложений и файлов
+        val attached = _uiState.value.attachedDoc
+        if (attached != null) {
+            _uiState.update { it.copy(attachedDoc = null) }
+        }
+
+        val filePrefix = if (attached != null) {
+            "[Прикрепленный файл: ${attached.name} (${attached.sizeBytes / 1024} КБ)]:\n```\n${attached.content}\n```\n\n"
+        } else ""
+
+        val (enrichedPrompt, loadedLocalFiles) = FileStorageManager.enrichPromptWithLocalFiles(prompt)
+        val finalUserPromptForModel = filePrefix + enrichedPrompt
+
         rolesList.add("user")
-        contentsList.add(prompt)
+        contentsList.add(finalUserPromptForModel)
 
         // Ветка 1: Внешний облачный API (OpenCode GO / OpenCode ZEN)
         if (!isLocal) {
@@ -874,6 +914,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                     dbHelper.saveMessage(currentChatId, completedMsg)
                     val refreshedSessions = dbHelper.getAllSessions()
 
+                    val fileNote = if (loadedLocalFiles.isNotEmpty()) " (файлы: ${loadedLocalFiles.joinToString()})" else ""
                     _uiState.update { current ->
                         val msgs = current.messages.map { m ->
                             if (m.id == assistantMsgId) completedMsg else m
@@ -882,11 +923,19 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                             messages = msgs,
                             chatSessions = refreshedSessions,
                             isGenerating = false,
-                            statusMessage = "Готово. Токенов: $tokenCount (~${String.format("%.1f", finalSpeed)} tok/s)",
+                            statusMessage = "Готово. Токенов: $tokenCount (~${String.format("%.1f", finalSpeed)} tok/s)$fileNote",
                             tokensPerSecond = finalSpeed,
                             generationTimeSeconds = totalElapsed
                         )
                     }
+
+                    // Обновляем виджет на рабочем столе
+                    LLMWidgetProvider.updateAllWidgets(
+                        getApplication(),
+                        prompt,
+                        finalText,
+                        "${_uiState.value.providerType.displayName} • ${_uiState.value.openCodeSelectedModel}"
+                    )
                 } catch (e: Exception) {
                     Log.e(TAG, "Ошибка генерации через ${_uiState.value.providerType.displayName}: ${e.message}")
                     val errText = "⚠️ Ошибка API (${_uiState.value.providerType.displayName}): ${e.message ?: "Сбой соединения"}"
@@ -969,6 +1018,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
             dbHelper.saveMessage(currentChatId, completedMsg)
             val refreshedSessions = dbHelper.getAllSessions()
 
+            val fileNote = if (loadedLocalFiles.isNotEmpty()) " (файлы: ${loadedLocalFiles.joinToString()})" else ""
             _uiState.update { current ->
                 val msgs = current.messages.map { m ->
                     if (m.id == assistantMsgId) {
@@ -981,12 +1031,20 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                     messages = msgs,
                     chatSessions = refreshedSessions,
                     isGenerating = false,
-                    statusMessage = "Готово. Токенов: $tokenCount (~${String.format("%.1f", finalSpeed)} tok/s)",
+                    statusMessage = "Готово. Токенов: $tokenCount (~${String.format("%.1f", finalSpeed)} tok/s)$fileNote",
                     tokensPerSecond = finalSpeed,
                     generationTimeSeconds = totalElapsed
                 )
             }
             updateRamUsage()
+
+            // Обновляем виджет на рабочем столе
+            LLMWidgetProvider.updateAllWidgets(
+                getApplication(),
+                prompt,
+                finalText,
+                "Офлайн GGUF • ${_uiState.value.modelPath}"
+            )
         }
     }
 
@@ -1070,6 +1128,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun unloadModel() {
+        LlamaBridge.isModelLoaded = false
         LlamaBridge.nativeUnload()
         openPfd?.close()
         openPfd = null

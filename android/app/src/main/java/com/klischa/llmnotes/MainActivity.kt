@@ -6,7 +6,9 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -42,6 +44,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Лаунчер выбора текстового файла (скрепка в чате)
+    private val openAttachmentLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let {
+            try {
+                var displayName = "file.txt"
+                var size = 0L
+                contentResolver.query(it, null, null, null, null)?.use { cursor ->
+                    val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (cursor.moveToFirst()) {
+                        if (nameIdx != -1) displayName = cursor.getString(nameIdx) ?: displayName
+                        if (sizeIdx != -1) size = cursor.getLong(sizeIdx)
+                    }
+                }
+
+                val directPath = getRealPathFromUri(it)
+                val bytes = contentResolver.openInputStream(it)?.use { input -> input.readBytes() } ?: ByteArray(0)
+                val isBinary = bytes.take(1024).any { b -> b == 0.toByte() }
+                if (isBinary) {
+                    Toast.makeText(this, "⚠️ Бинарный файл не поддерживается для анализа", Toast.LENGTH_LONG).show()
+                } else {
+                    val text = String(bytes, Charsets.UTF_8).take(25000)
+                    viewModel.attachFile(displayName, size, text, directPath)
+                    Toast.makeText(this, "📎 Файл '$displayName' прикреплен к запросу", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(this, "Ошибка чтения файла: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     // Запрос разрешений на чтение медиа (фото/видео) для Device Tools
     private val requestMediaPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -72,6 +107,9 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel,
                     onSelectModelClick = {
                         openDocumentLauncher.launch(arrayOf("*/*"))
+                    },
+                    onAttachFileClick = {
+                        openAttachmentLauncher.launch(arrayOf("*/*"))
                     }
                 )
             }

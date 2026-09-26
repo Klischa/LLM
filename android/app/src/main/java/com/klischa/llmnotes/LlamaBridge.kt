@@ -10,6 +10,9 @@ import android.util.Log
 object LlamaBridge {
     private const val TAG = "LlamaBridge"
 
+    @Volatile
+    var isModelLoaded: Boolean = false
+
     init {
         try {
             System.loadLibrary("llama-android")
