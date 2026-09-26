@@ -543,8 +543,17 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun updateRamUsage() {
-        val runtime = Runtime.getRuntime()
-        val usedMem = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
-        _uiState.update { it.copy(allocatedRamMb = usedMem) }
+        val rssMb = try {
+            File("/proc/self/status").useLines { lines ->
+                val line = lines.firstOrNull { it.startsWith("VmRSS:") }
+                line?.split("\\s+".toRegex())?.getOrNull(1)?.toLongOrNull()?.div(1024)
+            }
+        } catch (e: Exception) {
+            null
+        }
+
+        val fallbackMem = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024)
+        val finalMb = rssMb ?: fallbackMem
+        _uiState.update { it.copy(allocatedRamMb = finalMb) }
     }
 }

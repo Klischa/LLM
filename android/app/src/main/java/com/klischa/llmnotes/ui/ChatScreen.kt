@@ -69,11 +69,17 @@ fun ChatScreen(
                             text = "LLM",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
+                        val modelDisplayName = if (uiState.isModelLoaded) {
+                            java.io.File(uiState.modelPath).name.ifBlank { uiState.modelPath }
+                        } else {
+                            "Офлайн ассистент • Helio G99"
+                        }
                         Text(
-                            text = if (uiState.isModelLoaded) uiState.modelPath else "Офлайн ассистент • Helio G99",
+                            text = modelDisplayName,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
                     }
                 },
