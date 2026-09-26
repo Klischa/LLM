@@ -11,14 +11,18 @@ import javax.net.ssl.HttpsURLConnection
 
 /**
  * Типы провайдеров LLM:
- * - LOCAL_GGUF: локальный автономный запуск на процессоре Helio G99 через llama.cpp.
- * - OPENCODE_GO: облачный API OpenCode подписки GO (https://opencode.ai/zen/go/v1).
+ * - LOCAL_GGUF: локальный автономный запуск на процессоре Helio G99 через llama.cpp (100% бесплатно, без интернета).
+ * - OPENROUTER: облачный API OpenRouter с десятками бесплатных моделей (:free).
+ * - GROQ: облачный высокоскоростной API Groq с бесплатным доступом к LLaMA 3.3 70B.
  * - OPENCODE_ZEN: облачный API OpenCode подписки ZEN (https://opencode.ai/zen/v1).
+ * - OPENCODE_GO: облачный API OpenCode подписки GO (https://opencode.ai/zen/go/v1).
  */
 enum class LLMProviderType(val displayName: String, val baseUrl: String) {
     LOCAL_GGUF("Офлайн GGUF", ""),
-    OPENCODE_GO("OpenCode GO", "https://opencode.ai/zen/go/v1"),
-    OPENCODE_ZEN("OpenCode ZEN", "https://opencode.ai/zen/v1")
+    OPENROUTER("OpenRouter (Free)", "https://openrouter.ai/api/v1"),
+    GROQ("Groq Cloud (Free)", "https://api.groq.com/openai/v1"),
+    OPENCODE_ZEN("OpenCode ZEN", "https://opencode.ai/zen/v1"),
+    OPENCODE_GO("OpenCode GO", "https://opencode.ai/zen/go/v1")
 }
 
 data class ApiChatMessage(
@@ -27,9 +31,8 @@ data class ApiChatMessage(
 )
 
 /**
- * Клиент взаимодействия с внешним OpenAI-совместимым API платформы OpenCode.
- * Отправляет обязательные клиентские заголовки OpenCode (User-Agent, x-opencode-client,
- * x-opencode-session, x-session-id), необходимые для авторизации сессий и бесплатного тарифа.
+ * Клиент взаимодействия с внешними OpenAI-совместимыми API:
+ * OpenRouter, Groq Cloud, OpenCode ZEN, OpenCode GO.
  */
 object OpenCodeClient {
     private const val TAG = "OpenCodeClient"
@@ -82,6 +85,27 @@ object OpenCodeClient {
     fun generateSessionId(): String = generateOpenCodeId("ses_", desc = true)
     fun generateRequestId(): String = generateOpenCodeId("msg_", desc = false)
 
+    // Рекомендуемые бесплатные модели OpenRouter (суффикс :free гарантирует бесплатность)
+    val OPENROUTER_DEFAULT_MODELS = listOf(
+        "google/gemini-2.0-flash-exp:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "deepseek/deepseek-r1:free",
+        "deepseek/deepseek-chat:free",
+        "qwen/qwen-2.5-coder-32b-instruct:free",
+        "meta-llama/llama-3.1-8b-instruct:free",
+        "mistralai/mistral-7b-instruct:free",
+        "google/gemini-flash-1.5:free"
+    )
+
+    // Рекомендуемые бесплатные модели Groq Cloud
+    val GROQ_DEFAULT_MODELS = listOf(
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "deepseek-r1-distill-llama-70b",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it"
+    )
+
     // Рекомендуемые модели для подписки OpenCode GO
     val GO_DEFAULT_MODELS = listOf(
         "deepseek-v4-pro",
@@ -117,12 +141,18 @@ object OpenCodeClient {
     )
 
     fun isFreeModel(provider: LLMProviderType, model: String): Boolean {
-        if (provider != LLMProviderType.OPENCODE_ZEN) return false
-        return model == "big-pickle" || model.endsWith("-free")
+        return when (provider) {
+            LLMProviderType.OPENROUTER -> model.contains(":free")
+            LLMProviderType.GROQ -> true
+            LLMProviderType.OPENCODE_ZEN -> model == "big-pickle" || model.endsWith("-free")
+            else -> false
+        }
     }
 
     fun getDefaultModels(provider: LLMProviderType): List<String> {
         return when (provider) {
+            LLMProviderType.OPENROUTER -> OPENROUTER_DEFAULT_MODELS
+            LLMProviderType.GROQ -> GROQ_DEFAULT_MODELS
             LLMProviderType.OPENCODE_GO -> GO_DEFAULT_MODELS
             LLMProviderType.OPENCODE_ZEN -> ZEN_DEFAULT_MODELS
             else -> emptyList()
@@ -130,7 +160,7 @@ object OpenCodeClient {
     }
 
     /**
-     * Запрос актуального каталога моделей с сервера OpenCode (GET /v1/models).
+     * Запрос актуального каталога моделей с сервера провайдера (GET /v1/models).
      */
     fun fetchModels(provider: LLMProviderType, apiKey: String): List<String> {
         if (apiKey.isBlank() || provider == LLMProviderType.LOCAL_GGUF) {
@@ -145,17 +175,30 @@ object OpenCodeClient {
             conn.requestMethod = "GET"
 
             val rawKey = apiKey.removePrefix("Bearer ").removePrefix("bearer ").trim()
-            val sessionId = generateSessionId()
-            val requestId = generateRequestId()
-
             conn.setRequestProperty("Authorization", "Bearer $rawKey")
-            conn.setRequestProperty("x-api-key", rawKey)
             conn.setRequestProperty("Accept", "application/json")
-            conn.setRequestProperty("User-Agent", OPENCODE_USER_AGENT)
-            conn.setRequestProperty("x-opencode-client", "cli")
-            conn.setRequestProperty("x-opencode-project", "global")
-            conn.setRequestProperty("x-opencode-session", sessionId)
-            conn.setRequestProperty("x-opencode-request", requestId)
+
+            when (provider) {
+                LLMProviderType.OPENROUTER -> {
+                    conn.setRequestProperty("User-Agent", "LLM-Android/1.2.6 (Infinix Note 30)")
+                    conn.setRequestProperty("HTTP-Referer", "https://github.com/Klischa/LLM")
+                    conn.setRequestProperty("X-Title", "LLM Android Assistant")
+                }
+                LLMProviderType.GROQ -> {
+                    conn.setRequestProperty("User-Agent", "LLM-Android/1.2.6 (Infinix Note 30)")
+                }
+                LLMProviderType.OPENCODE_GO, LLMProviderType.OPENCODE_ZEN -> {
+                    val sessionId = generateSessionId()
+                    val requestId = generateRequestId()
+                    conn.setRequestProperty("x-api-key", rawKey)
+                    conn.setRequestProperty("User-Agent", OPENCODE_USER_AGENT)
+                    conn.setRequestProperty("x-opencode-client", "cli")
+                    conn.setRequestProperty("x-opencode-project", "global")
+                    conn.setRequestProperty("x-opencode-session", sessionId)
+                    conn.setRequestProperty("x-opencode-request", requestId)
+                }
+                else -> {}
+            }
             conn.connectTimeout = 10000
             conn.readTimeout = 15000
 
@@ -187,9 +230,16 @@ object OpenCodeClient {
                     }
                 }
             }
+
+            if (provider == LLMProviderType.OPENROUTER && list.isNotEmpty()) {
+                val freeModels = list.filter { it.contains(":free") }.sorted()
+                val otherModels = list.filter { !it.contains(":free") }.sorted()
+                return (freeModels + otherModels).distinct()
+            }
+
             return if (list.isNotEmpty()) (getDefaultModels(provider) + list).distinct().sorted() else getDefaultModels(provider)
         } catch (e: Exception) {
-            Log.w(TAG, "Ошибка получения моделей OpenCode: ${e.message}")
+            Log.w(TAG, "Ошибка получения моделей: ${e.message}")
             return getDefaultModels(provider)
         } finally {
             conn?.disconnect()
@@ -198,7 +248,6 @@ object OpenCodeClient {
 
     /**
      * Потоковая генерация ответа через Server-Sent Events (SSE).
-     * Эмулирует официальный OpenCode CLI для снятия ограничений Free Tier.
      */
     fun streamChatCompletions(
         provider: LLMProviderType,
@@ -217,23 +266,35 @@ object OpenCodeClient {
             conn = url.openConnection() as HttpsURLConnection
             conn.requestMethod = "POST"
 
-            val sessionId = generateSessionId()
-            val requestId = generateRequestId()
             val rawKey = apiKey.removePrefix("Bearer ").removePrefix("bearer ").trim()
 
             conn.setRequestProperty("Authorization", "Bearer $rawKey")
-            conn.setRequestProperty("x-api-key", rawKey)
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             conn.setRequestProperty("Accept", "text/event-stream")
 
-            // Точные заголовки OpenCode CLI для авторизации шлюза и Free Tier
-            conn.setRequestProperty("User-Agent", OPENCODE_USER_AGENT)
-            conn.setRequestProperty("x-opencode-client", "cli")
-            conn.setRequestProperty("x-opencode-project", "global")
-            conn.setRequestProperty("x-opencode-session", sessionId)
-            conn.setRequestProperty("x-opencode-request", requestId)
-            conn.setRequestProperty("x-session-id", sessionId)
-            conn.setRequestProperty("x-session-affinity", sessionId)
+            when (provider) {
+                LLMProviderType.OPENCODE_GO, LLMProviderType.OPENCODE_ZEN -> {
+                    val sessionId = generateSessionId()
+                    val requestId = generateRequestId()
+                    conn.setRequestProperty("x-api-key", rawKey)
+                    conn.setRequestProperty("User-Agent", OPENCODE_USER_AGENT)
+                    conn.setRequestProperty("x-opencode-client", "cli")
+                    conn.setRequestProperty("x-opencode-project", "global")
+                    conn.setRequestProperty("x-opencode-session", sessionId)
+                    conn.setRequestProperty("x-opencode-request", requestId)
+                    conn.setRequestProperty("x-session-id", sessionId)
+                    conn.setRequestProperty("x-session-affinity", sessionId)
+                }
+                LLMProviderType.OPENROUTER -> {
+                    conn.setRequestProperty("User-Agent", "LLM-Android/1.2.6 (Infinix Note 30)")
+                    conn.setRequestProperty("HTTP-Referer", "https://github.com/Klischa/LLM")
+                    conn.setRequestProperty("X-Title", "LLM Android Assistant")
+                }
+                LLMProviderType.GROQ -> {
+                    conn.setRequestProperty("User-Agent", "LLM-Android/1.2.6 (Infinix Note 30)")
+                }
+                else -> {}
+            }
 
             conn.doOutput = true
             conn.connectTimeout = 15000
@@ -271,18 +332,22 @@ object OpenCodeClient {
                 }
 
                 val tip = when (responseCode) {
-                    401 -> "Неверный API-ключ. Проверьте, что ключ подходит для выбранной подписки (${provider.displayName})."
-                    403 -> if (isFreeModel(provider, model)) {
-                        "Бесплатная промо-модель '$model' заблокирована шлюзом OpenCode для вашего платного API-ключа (HTTP 403).\n💡 Выберите стандартную модель из каталога (например, 'qwen3.6-plus', 'claude-3-7-sonnet', 'gpt-4o')."
-                    } else {
-                        "Доступ отклонен ($cleanErr). Проверьте активность подписки ${provider.displayName}."
+                    401 -> "Неверный API-ключ для ${provider.displayName}."
+                    403 -> when (provider) {
+                        LLMProviderType.OPENROUTER -> "Доступ отклонен OpenRouter ($cleanErr). Проверьте ключ на openrouter.ai/keys."
+                        LLMProviderType.GROQ -> "Доступ отклонен Groq Cloud ($cleanErr). Проверьте ключ на console.groq.com."
+                        else -> if (isFreeModel(provider, model)) {
+                            "Бесплатная промо-модель '$model' заблокирована шлюзом OpenCode для вашего платного API-ключа (HTTP 403).\n💡 Выберите стандартную модель из каталога (например, 'qwen3.6-plus', 'claude-3-7-sonnet', 'gpt-4o')."
+                        } else {
+                            "Доступ отклонен ($cleanErr). Проверьте активность подписки ${provider.displayName}."
+                        }
                     }
                     404 -> if (provider == LLMProviderType.OPENCODE_ZEN && !isFreeModel(provider, model)) {
                         "Модель '$model' недоступна или маршрут не найден (HTTP 404).\n💡 Рекомендуем использовать проверенные рабочие модели: 'qwen3.6-plus', 'qwen3.8-flash', 'claude-3-7-sonnet', 'gpt-4o'."
                     } else {
                         "Модель '$model' не найдена или временно недоступна: $cleanErr"
                     }
-                    429 -> "Превышен лимит запросов OpenCode. Попробуйте чуть позже."
+                    429 -> "Превышен лимит запросов ${provider.displayName}. Попробуйте чуть позже."
                     else -> cleanErr
                 }
                 throw Exception("Ошибка ${provider.displayName} ($responseCode): $tip")

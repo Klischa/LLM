@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -232,8 +233,7 @@ fun ChatScreen(
                                     if (uiState.isModelLoaded) java.io.File(uiState.modelPath).name.ifBlank { uiState.modelPath }
                                     else "Офлайн GGUF • Helio G99"
                                 }
-                                LLMProviderType.OPENCODE_GO -> "OpenCode GO • ${uiState.openCodeSelectedModel}"
-                                LLMProviderType.OPENCODE_ZEN -> "OpenCode ZEN • ${uiState.openCodeSelectedModel}"
+                                else -> "${uiState.providerType.displayName} • ${uiState.openCodeSelectedModel}"
                             }
                             Text(
                                 text = modelDisplayName,
@@ -568,9 +568,9 @@ fun EmptyChatPlaceholder(
                 Text(
                     text = when {
                         isLocal && uiState.isModelLoaded -> "Модель готова к диалогу. Введите сообщение ниже или воспользуйтесь быстрыми кнопками."
-                        isLocal -> "Загрузите GGUF-модель (Qwen 2.5, Llama 3.2), чтобы начать общение, либо подключите API OpenCode."
+                        isLocal -> "Загрузите GGUF-модель (Qwen 2.5, Llama 3.2), чтобы начать общение, либо подключите облачный API."
                         !isLocal && uiState.currentApiKey.isNotBlank() -> "Модель ${uiState.openCodeSelectedModel} готова к работе через ${uiState.providerType.displayName}."
-                        else -> "Введите API-ключ OpenCode для доступа к ${uiState.providerType.displayName}."
+                        else -> "Введите API-ключ для доступа к ${uiState.providerType.displayName}."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -634,8 +634,10 @@ fun ProviderSettingsDialog(
 
                 // Чипы выбора провайдера
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     FilterChip(
                         selected = uiState.providerType == LLMProviderType.LOCAL_GGUF,
@@ -643,19 +645,29 @@ fun ProviderSettingsDialog(
                         label = { Text("📱 Офлайн", fontSize = 11.sp) }
                     )
                     FilterChip(
-                        selected = uiState.providerType == LLMProviderType.OPENCODE_GO,
-                        onClick = { viewModel.setProviderType(LLMProviderType.OPENCODE_GO) },
-                        label = { Text("⚡ OpenCode GO", fontSize = 11.sp) }
+                        selected = uiState.providerType == LLMProviderType.OPENROUTER,
+                        onClick = { viewModel.setProviderType(LLMProviderType.OPENROUTER) },
+                        label = { Text("🌐 OpenRouter Free", fontSize = 11.sp) }
+                    )
+                    FilterChip(
+                        selected = uiState.providerType == LLMProviderType.GROQ,
+                        onClick = { viewModel.setProviderType(LLMProviderType.GROQ) },
+                        label = { Text("⚡ Groq Free", fontSize = 11.sp) }
                     )
                     FilterChip(
                         selected = uiState.providerType == LLMProviderType.OPENCODE_ZEN,
                         onClick = { viewModel.setProviderType(LLMProviderType.OPENCODE_ZEN) },
-                        label = { Text("🧘 ZEN", fontSize = 11.sp) }
+                        label = { Text("🧘 Zen", fontSize = 11.sp) }
+                    )
+                    FilterChip(
+                        selected = uiState.providerType == LLMProviderType.OPENCODE_GO,
+                        onClick = { viewModel.setProviderType(LLMProviderType.OPENCODE_GO) },
+                        label = { Text("🚀 Go", fontSize = 11.sp) }
                     )
                 }
 
                 if (uiState.providerType != LLMProviderType.LOCAL_GGUF) {
-                    // Описание подписки
+                    // Описание провайдера
                     Card(
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
@@ -663,10 +675,17 @@ fun ProviderSettingsDialog(
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Text(
-                            text = if (uiState.providerType == LLMProviderType.OPENCODE_GO)
-                                "⚡ OpenCode GO: открытые и кодинг-модели (DeepSeek V4 Pro, Kimi K2.6, Qwen 3.6, GLM 5.1, MiniMax M3)."
-                            else
-                                "🧘 OpenCode ZEN: доступ к флагманам frontier (Claude 3.7 Sonnet, GPT-4o, DeepSeek R1, Gemini 2.0).",
+                            text = when (uiState.providerType) {
+                                LLMProviderType.OPENROUTER ->
+                                    "🌐 OpenRouter: десятки бесплатных моделей с суффиксом :free (Gemini 2.0 Flash, LLaMA 3.3 70B, Qwen 2.5 Coder, DeepSeek R1). Получите бесплатный ключ на openrouter.ai/keys."
+                                LLMProviderType.GROQ ->
+                                    "⚡ Groq Cloud: сверхбыстрый бесплатный доступ (до 200+ tok/s) к LLaMA 3.3 70B, LLaMA 3.1 8B, DeepSeek R1 Distill. Получите бесплатный ключ на console.groq.com/keys."
+                                LLMProviderType.OPENCODE_ZEN ->
+                                    "🧘 OpenCode ZEN: доступ к платным моделям (Qwen 3.6 Plus, Claude 3.7 Sonnet, GPT-4o, DeepSeek R1). Получите ключ на opencode.ai/auth."
+                                LLMProviderType.OPENCODE_GO ->
+                                    "🚀 OpenCode GO: открытые и кодинг-модели по подписке GO (DeepSeek V4 Pro, Kimi K2.6, Qwen 3.6). Получите ключ на opencode.ai/auth."
+                                LLMProviderType.LOCAL_GGUF -> ""
+                            },
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                             modifier = Modifier.padding(8.dp)
                         )
@@ -680,14 +699,19 @@ fun ProviderSettingsDialog(
                             viewModel.setOpenCodeApiKey(it, uiState.providerType)
                         },
                         label = {
+                            Text("API-ключ ${uiState.providerType.displayName}")
+                        },
+                        placeholder = {
                             Text(
-                                if (uiState.providerType == LLMProviderType.OPENCODE_ZEN)
-                                    "API-ключ OpenCode ZEN"
-                                else
-                                    "API-ключ OpenCode GO"
+                                when (uiState.providerType) {
+                                    LLMProviderType.OPENROUTER -> "sk-or-v1-..."
+                                    LLMProviderType.GROQ -> "gsk_..."
+                                    LLMProviderType.OPENCODE_ZEN -> "sk-..."
+                                    LLMProviderType.OPENCODE_GO -> "sk-..."
+                                    else -> "sk-..."
+                                }
                             )
                         },
-                        placeholder = { Text(if (uiState.providerType == LLMProviderType.OPENCODE_ZEN) "sk-zen-... или sk-..." else "sk-...") },
                         singleLine = true,
                         visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
                         trailingIcon = {
@@ -782,14 +806,18 @@ fun ProviderSettingsDialog(
                         shape = RoundedCornerShape(10.dp)
                     )
 
-                    if (uiState.providerType == LLMProviderType.OPENCODE_ZEN) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "💡 Для платного аккаунта Zen рекомендуются: qwen3.6-plus, qwen3.8-flash, claude-3-7-sonnet, gpt-4o. Промо-модели Free предназначены для анонимного CLI.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = when (uiState.providerType) {
+                            LLMProviderType.OPENROUTER -> "💡 Модели с плашкой Free (суффикс :free) полностью бесплатны на OpenRouter без пополнения счета."
+                            LLMProviderType.GROQ -> "💡 В Groq Cloud все модели предоставляются с высоким бесплатным лимитом (до 30 запросов в минуту)."
+                            LLMProviderType.OPENCODE_ZEN -> "💡 Для платного аккаунта Zen рекомендуются: qwen3.6-plus, qwen3.8-flash, claude-3-7-sonnet, gpt-4o. Промо-модели Free предназначены для анонимного CLI."
+                            LLMProviderType.OPENCODE_GO -> "💡 Модели доступны при наличии активной подписки OpenCode GO."
+                            else -> ""
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 } else {
                     Text(
                         text = "В офлайн-режиме модель выполняется локально на процессоре Helio G99 смартфона без подключения к интернету.",

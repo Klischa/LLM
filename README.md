@@ -328,29 +328,46 @@ adb push models_gguf/qwen2.5-1.5b-q4_k_m.gguf /sdcard/Download/
 
 ---
 
-## 16. Подключение внешнего API OpenCode: подписки GO и ZEN (v1.2.5)
+## 16. Подключение внешних API: OpenRouter Free, Groq Free, OpenCode ZEN и GO (v1.2.6)
 
-В приложении реализован гибридный режим работы (Офлайн GGUF + Облачные API):
-- **OpenCode GO**:
-  - Базовый эндпоинт: `https://opencode.ai/zen/go/v1`
-  - Преднастроенные модели: `deepseek-v4-pro`, `kimi-k2.6`, `qwen3.6-plus`, `glm-5.1`, `minimax-m3`, `gpt-5.6-luna`, `grok-4.6`, `qwen2.5-coder-32b`, `deepseek-v3`.
-  - Отдельное хранилище API-ключа для подписки OpenCode GO.
-- **OpenCode ZEN**:
-  - Базовый эндпоинт: `https://opencode.ai/zen/v1`
-  - Поддерживаемые флагманские модели: `qwen3.6-plus`, `qwen3.8-flash`, `qwen3.8-max`, `claude-3-7-sonnet`, `claude-3-5-sonnet`, `claude-haiku-4-5`, `gpt-4o`, `gpt-4o-mini`, `gpt-5.6-luna`, `deepseek-r1`, `deepseek-v3`, `minimax-m3`, `glm-5.1`.
-  - Возможность ручного ввода имени любой поддерживаемой модели в UI диалоге.
-  - Отдельное хранилище API-ключа для подписки OpenCode ZEN.
-- **Корректная обработка Reasoning/Thinking токенов**:
-  - Потоковый парсер SSE фильтрует null-поля JSON и отделяет рассуждения (`reasoning_content`) от основного ответа (`content`), предотвращая появление строк `nullnullnull`.
-  - Блок рассуждений (например, у моделей Qwen и DeepSeek R1) аккуратно обрамляется заголовком `💭 *Размышления:*` и разделителем перед финальным ответом.
-- **Точная эмуляция официального OpenCode CLI-клиента**:
-  - Глобальное переопределение JVM User-Agent (`System.setProperty("http.agent", ...)`) исключает утечку заголовка Dalvik.
-  - `User-Agent: opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14`.
-  - `x-opencode-client: cli`, `x-opencode-project: global`.
-  - Алгоритмическая генерация `x-opencode-session` (`ses_` с нисходящим инвертированным timestamp) и `x-opencode-request` (`msg_` с восходящим timestamp) + 14 Base62 символов, полностью удовлетворяющая проверке шлюза OpenCode Edge.
-- **Потоковый вывод токенов (SSE)**: Ответы через облачный API стримятся в реальном времени с измерением скорости (`tok/s`) точно так же, как локальная модель.
-- **Динамическое объединение каталогов**: Кнопка «🔄 Обновить» опрашивает эндпоинт `/v1/models` и дополняет список моделей актуальными вариантами с серверов OpenCode.
-- **Интеграция с Device Tools и историей**: Все функции устройства (фото, память, заряд) и сохранение переписки в SQLite работают как для локальной модели, так и при общении через OpenCode.
+В приложении реализован гибридный мультипровайдерный режим работы (Офлайн GGUF + Облачные API):
+
+### 1. 🌐 OpenRouter Free (Бесплатные облачные модели)
+- **Базовый эндпоинт**: `https://openrouter.ai/api/v1`
+- **Бесплатный ключ**: Создается в один клик на [openrouter.ai/keys](https://openrouter.ai/keys) без привязки банковской карты.
+- **Бесплатные модели (:free)**:
+  - `google/gemini-2.0-flash-exp:free`
+  - `meta-llama/llama-3.3-70b-instruct:free`
+  - `deepseek/deepseek-r1:free`
+  - `deepseek/deepseek-chat:free`
+  - `qwen/qwen-2.5-coder-32b-instruct:free`
+  - `meta-llama/llama-3.1-8b-instruct:free`
+  - `mistralai/mistral-7b-instruct:free`
+- Все модели с суффиксом `:free` помечены бейджем **`Free`** и работают полностью бесплатно.
+
+### 2. ⚡ Groq Cloud (Сверхбыстрый бесплатный доступ)
+- **Базовый эндпоинт**: `https://api.groq.com/openai/v1`
+- **Бесплатный ключ**: Создается на [console.groq.com/keys](https://console.groq.com/keys) без привязки карты.
+- **Скорость генерации**: до 150–250 tok/s на специализированных чипах LPU.
+- **Бесплатные модели**:
+  - `llama-3.3-70b-versatile` (флагман LLaMA 70B)
+  - `llama-3.1-8b-instant` (мгновенный отклик)
+  - `deepseek-r1-distill-llama-70b` (модель рассуждений DeepSeek R1 на весах LLaMA)
+  - `mixtral-8x7b-32768`
+  - `gemma2-9b-it`
+- Бесплатный лимит: до 30 запросов в минуту / 14 400 запросов в сутки.
+
+### 3. 🧘 OpenCode ZEN & 🚀 OpenCode GO
+- **Эндпоинты**: `https://opencode.ai/zen/v1` и `https://opencode.ai/zen/go/v1`
+- Поддерживаемые флагманские модели: `qwen3.6-plus`, `qwen3.8-flash`, `claude-3-7-sonnet`, `gpt-4o`, `deepseek-v4-pro`.
+- Полная эмуляция официального OpenCode CLI-клиента (`User-Agent`, Base62 `x-opencode-session`, `x-opencode-request`).
+
+### Особенности реализации:
+- **Раздельное хранение ключей**: Ключ для каждого провайдера хранится независимо в зашифрованных настройках (`SharedPreferences`).
+- **Корректная обработка Reasoning/Thinking токенов**: Потоковый парсер SSE фильтрует null-поля JSON и выводит рассуждения в блоке `💭 *Размышления:*`, предотвращая вывод строк `nullnullnull`.
+- **Ручной ввод моделей**: Любую модель можно выбрать из списка или ввести вручную.
+- **Потоковый вывод токенов (SSE)**: Скорость и токены подсчитываются в реальном времени.
+- **Интеграция с Device Tools и историей**: Все функции устройства (фото, память, заряд) и SQLite-база данных работают одинаково для всех провайдеров.
 
 
 

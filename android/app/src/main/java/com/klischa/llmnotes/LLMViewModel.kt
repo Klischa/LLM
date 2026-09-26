@@ -72,8 +72,10 @@ data class UiState(
     val providerType: LLMProviderType = LLMProviderType.LOCAL_GGUF,
     val openCodeGoApiKey: String = "",
     val openCodeZenApiKey: String = "",
-    val openCodeSelectedModel: String = "deepseek-v4-pro",
-    val openCodeAvailableModels: List<String> = OpenCodeClient.GO_DEFAULT_MODELS,
+    val openRouterApiKey: String = "",
+    val groqApiKey: String = "",
+    val openCodeSelectedModel: String = "qwen3.6-plus",
+    val openCodeAvailableModels: List<String> = OpenCodeClient.ZEN_DEFAULT_MODELS,
     val isProviderDialogVisible: Boolean = false,
     val isFetchingModels: Boolean = false,
     val systemPrompt: String = SystemPromptPreset.UNIVERSAL.prompt,
@@ -89,6 +91,8 @@ data class UiState(
 ) {
     val currentApiKey: String
         get() = when (providerType) {
+            LLMProviderType.OPENROUTER -> openRouterApiKey
+            LLMProviderType.GROQ -> groqApiKey
             LLMProviderType.OPENCODE_GO -> openCodeGoApiKey
             LLMProviderType.OPENCODE_ZEN -> openCodeZenApiKey
             LLMProviderType.LOCAL_GGUF -> ""
@@ -119,8 +123,12 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         private const val PREF_OPENCODE_API_KEY = "opencode_api_key"
         private const val PREF_OPENCODE_GO_KEY = "opencode_go_key"
         private const val PREF_OPENCODE_ZEN_KEY = "opencode_zen_key"
+        private const val PREF_OPENROUTER_KEY = "openrouter_key"
+        private const val PREF_GROQ_KEY = "groq_key"
         private const val PREF_OPENCODE_MODEL_GO = "opencode_model_go"
         private const val PREF_OPENCODE_MODEL_ZEN = "opencode_model_zen"
+        private const val PREF_OPENROUTER_MODEL = "openrouter_model"
+        private const val PREF_GROQ_MODEL = "groq_model"
     }
 
     fun saveLastModelInfo(directPath: String?, uriStr: String?, displayName: String) {
@@ -213,9 +221,21 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
             ?: prefs.getString(PREF_OPENCODE_API_KEY, "") ?: ""
         val keyZen = prefs.getString(PREF_OPENCODE_ZEN_KEY, null)
             ?: prefs.getString(PREF_OPENCODE_API_KEY, "") ?: ""
+        val keyOpenRouter = prefs.getString(PREF_OPENROUTER_KEY, "") ?: ""
+        val keyGroq = prefs.getString(PREF_GROQ_KEY, "") ?: ""
+
         val modelGo = prefs.getString(PREF_OPENCODE_MODEL_GO, "deepseek-v4-pro") ?: "deepseek-v4-pro"
         val modelZen = prefs.getString(PREF_OPENCODE_MODEL_ZEN, "qwen3.6-plus") ?: "qwen3.6-plus"
-        val selectedModel = if (provider == LLMProviderType.OPENCODE_ZEN) modelZen else modelGo
+        val modelOpenRouter = prefs.getString(PREF_OPENROUTER_MODEL, "google/gemini-2.0-flash-exp:free") ?: "google/gemini-2.0-flash-exp:free"
+        val modelGroq = prefs.getString(PREF_GROQ_MODEL, "llama-3.3-70b-versatile") ?: "llama-3.3-70b-versatile"
+
+        val selectedModel = when (provider) {
+            LLMProviderType.OPENROUTER -> modelOpenRouter
+            LLMProviderType.GROQ -> modelGroq
+            LLMProviderType.OPENCODE_ZEN -> modelZen
+            LLMProviderType.OPENCODE_GO -> modelGo
+            LLMProviderType.LOCAL_GGUF -> ""
+        }
         val models = OpenCodeClient.getDefaultModels(provider)
 
         _uiState.update {
@@ -223,6 +243,8 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                 providerType = provider,
                 openCodeGoApiKey = keyGo,
                 openCodeZenApiKey = keyZen,
+                openRouterApiKey = keyOpenRouter,
+                groqApiKey = keyGroq,
                 openCodeSelectedModel = selectedModel,
                 openCodeAvailableModels = models
             )
@@ -234,6 +256,8 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putString(PREF_PROVIDER_TYPE, type.name).apply()
 
         val selectedModel = when (type) {
+            LLMProviderType.OPENROUTER -> prefs.getString(PREF_OPENROUTER_MODEL, "google/gemini-2.0-flash-exp:free") ?: "google/gemini-2.0-flash-exp:free"
+            LLMProviderType.GROQ -> prefs.getString(PREF_GROQ_MODEL, "llama-3.3-70b-versatile") ?: "llama-3.3-70b-versatile"
             LLMProviderType.OPENCODE_GO -> prefs.getString(PREF_OPENCODE_MODEL_GO, "deepseek-v4-pro") ?: "deepseek-v4-pro"
             LLMProviderType.OPENCODE_ZEN -> prefs.getString(PREF_OPENCODE_MODEL_ZEN, "qwen3.6-plus") ?: "qwen3.6-plus"
             LLMProviderType.LOCAL_GGUF -> ""
@@ -260,12 +284,24 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
     fun setOpenCodeApiKey(key: String, provider: LLMProviderType = _uiState.value.providerType) {
         val cleanKey = key.trim()
         val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (provider == LLMProviderType.OPENCODE_ZEN) {
-            prefs.edit().putString(PREF_OPENCODE_ZEN_KEY, cleanKey).apply()
-            _uiState.update { it.copy(openCodeZenApiKey = cleanKey) }
-        } else {
-            prefs.edit().putString(PREF_OPENCODE_GO_KEY, cleanKey).apply()
-            _uiState.update { it.copy(openCodeGoApiKey = cleanKey) }
+        when (provider) {
+            LLMProviderType.OPENROUTER -> {
+                prefs.edit().putString(PREF_OPENROUTER_KEY, cleanKey).apply()
+                _uiState.update { it.copy(openRouterApiKey = cleanKey) }
+            }
+            LLMProviderType.GROQ -> {
+                prefs.edit().putString(PREF_GROQ_KEY, cleanKey).apply()
+                _uiState.update { it.copy(groqApiKey = cleanKey) }
+            }
+            LLMProviderType.OPENCODE_ZEN -> {
+                prefs.edit().putString(PREF_OPENCODE_ZEN_KEY, cleanKey).apply()
+                _uiState.update { it.copy(openCodeZenApiKey = cleanKey) }
+            }
+            LLMProviderType.OPENCODE_GO -> {
+                prefs.edit().putString(PREF_OPENCODE_GO_KEY, cleanKey).apply()
+                _uiState.update { it.copy(openCodeGoApiKey = cleanKey) }
+            }
+            LLMProviderType.LOCAL_GGUF -> {}
         }
         if (cleanKey.isNotBlank()) {
             fetchRemoteModels()
@@ -274,8 +310,16 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setOpenCodeSelectedModel(model: String) {
         val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val key = if (_uiState.value.providerType == LLMProviderType.OPENCODE_ZEN) PREF_OPENCODE_MODEL_ZEN else PREF_OPENCODE_MODEL_GO
-        prefs.edit().putString(key, model).apply()
+        val key = when (_uiState.value.providerType) {
+            LLMProviderType.OPENROUTER -> PREF_OPENROUTER_MODEL
+            LLMProviderType.GROQ -> PREF_GROQ_MODEL
+            LLMProviderType.OPENCODE_ZEN -> PREF_OPENCODE_MODEL_ZEN
+            LLMProviderType.OPENCODE_GO -> PREF_OPENCODE_MODEL_GO
+            LLMProviderType.LOCAL_GGUF -> ""
+        }
+        if (key.isNotEmpty()) {
+            prefs.edit().putString(key, model).apply()
+        }
         _uiState.update {
             it.copy(
                 openCodeSelectedModel = model,
@@ -844,7 +888,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Ошибка генерации через OpenCode: ${e.message}")
+                    Log.e(TAG, "Ошибка генерации через ${_uiState.value.providerType.displayName}: ${e.message}")
                     val errText = "⚠️ Ошибка API (${_uiState.value.providerType.displayName}): ${e.message ?: "Сбой соединения"}"
                     val errorMsg = ChatMessage(
                         id = assistantMsgId,
@@ -860,7 +904,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                         current.copy(
                             messages = msgs,
                             isGenerating = false,
-                            statusMessage = "Ошибка OpenCode: ${e.message}"
+                            statusMessage = "Ошибка ${current.providerType.displayName}: ${e.message}"
                         )
                     }
                 }
