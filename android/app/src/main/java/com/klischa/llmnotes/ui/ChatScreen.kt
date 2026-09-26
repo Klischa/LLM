@@ -51,6 +51,7 @@ import com.klischa.llmnotes.MessageRole
 import com.klischa.llmnotes.SystemPromptPreset
 import com.klischa.llmnotes.UiState
 import com.klischa.llmnotes.api.LLMProviderType
+import com.klischa.llmnotes.api.OpenCodeClient
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
