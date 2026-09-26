@@ -21,10 +21,16 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -39,6 +45,7 @@ import com.klischa.llmnotes.LLMViewModel
 import com.klischa.llmnotes.MessageRole
 import com.klischa.llmnotes.SystemPromptPreset
 import com.klischa.llmnotes.UiState
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -53,6 +60,10 @@ fun ChatScreen(
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
 
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val coroutineScope = rememberCoroutineScope()
+    var chatSearchQuery by remember { mutableStateOf("") }
+
     // Автоматическая прокрутка к последнему сообщению при получении новых токенов
     LaunchedEffect(uiState.messages.size, uiState.messages.lastOrNull()?.text) {
         if (uiState.messages.isNotEmpty()) {
@@ -60,29 +71,160 @@ fun ChatScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "LLM",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
-                        val modelDisplayName = if (uiState.isModelLoaded) {
-                            java.io.File(uiState.modelPath).name.ifBlank { uiState.modelPath }
-                        } else {
-                            "Офлайн ассистент • Helio G99"
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                modifier = Modifier.width(310.dp)
+            ) {
+                // Заголовок боковой шторки
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "История диалогов",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                    IconButton(
+                        onClick = {
+                            viewModel.createNewChat()
+                            coroutineScope.launch { drawerState.close() }
                         }
-                        Text(
-                            text = modelDisplayName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Новый диалог")
+                    }
+                }
+
+                HorizontalDivider()
+
+                // Поиск по названию диалогов
+                OutlinedTextField(
+                    value = chatSearchQuery,
+                    onValueChange = { chatSearchQuery = it },
+                    placeholder = { Text("Поиск диалога...", fontSize = 12.sp) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    singleLine = true
+                )
+
+                // Список диалогов
+                val filteredSessions = if (chatSearchQuery.isBlank()) {
+                    uiState.chatSessions
+                } else {
+                    uiState.chatSessions.filter { it.title.contains(chatSearchQuery, ignoreCase = true) }
+                }
+
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(horizontal = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(filteredSessions, key = { it.id }) { session ->
+                        val isSelected = session.id == uiState.currentChatId
+                        val dateFormat = SimpleDateFormat("d MMM, HH:mm", Locale.getDefault())
+                        val timeStr = dateFormat.format(Date(session.updatedAt))
+
+                        NavigationDrawerItem(
+                            label = {
+                                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                    Text(
+                                        text = session.title,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    )
+                                    Text(
+                                        text = timeStr,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                    )
+                                }
+                            },
+                            selected = isSelected,
+                            onClick = {
+                                viewModel.selectChat(session.id)
+                                coroutineScope.launch { drawerState.close() }
+                            },
+                            badge = {
+                                IconButton(
+                                    onClick = { viewModel.deleteChat(session.id) },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Удалить диалог",
+                                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            },
+                            modifier = Modifier.padding(vertical = 2.dp),
+                            colors = NavigationDrawerItemDefaults.colors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                            )
                         )
                     }
-                },
+                }
+
+                // Кнопка создания нового диалога внизу шторки
+                Button(
+                    onClick = {
+                        viewModel.createNewChat()
+                        coroutineScope.launch { drawerState.close() }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Новый диалог")
+                }
+            }
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = { coroutineScope.launch { drawerState.open() } }) {
+                            Icon(Icons.Default.Menu, contentDescription = "Меню диалогов")
+                        }
+                    },
+                    title = {
+                        Column {
+                            val currentTitle = uiState.chatSessions.find { it.id == uiState.currentChatId }?.title ?: "LLM"
+                            Text(
+                                text = currentTitle,
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                            val modelDisplayName = if (uiState.isModelLoaded) {
+                                java.io.File(uiState.modelPath).name.ifBlank { uiState.modelPath }
+                            } else {
+                                "Офлайн ассистент • Helio G99"
+                            }
+                            Text(
+                                text = modelDisplayName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                        }
+                    },
                 actions = {
                     // Кнопка настройки системного промпта
                     IconButton(onClick = { viewModel.toggleSystemPromptExpanded() }) {
@@ -186,6 +328,7 @@ fun ChatScreen(
             )
         }
     }
+}
 }
 
 @Composable

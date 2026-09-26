@@ -63,6 +63,8 @@ data class UiState(
     val isGenerating: Boolean = false,
     val inputText: String = "",
     val messages: List<ChatMessage> = emptyList(),
+    val currentChatId: String = "",
+    val chatSessions: List<com.klischa.llmnotes.data.ChatSession> = emptyList(),
     val systemPrompt: String = SystemPromptPreset.UNIVERSAL.prompt,
     val isSystemPromptExpanded: Boolean = false,
     val statusMessage: String = "Выберите модель GGUF в памяти смартфона",
@@ -80,10 +82,93 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
+    private val dbHelper = com.klischa.llmnotes.data.ChatDatabaseHelper(application)
     private var openPfd: ParcelFileDescriptor? = null
 
     companion object {
         private const val TAG = "LLMViewModel"
+    }
+
+    init {
+        loadChatSessions()
+    }
+
+    private fun loadChatSessions() {
+        val sessions = dbHelper.getAllSessions()
+        if (sessions.isEmpty()) {
+            val newId = UUID.randomUUID().toString()
+            val newSession = dbHelper.createSession(newId, "Новый чат")
+            _uiState.update {
+                it.copy(
+                    currentChatId = newId,
+                    chatSessions = listOf(newSession),
+                    messages = emptyList()
+                )
+            }
+        } else {
+            val current = sessions.first()
+            val msgs = dbHelper.getMessages(current.id)
+            _uiState.update {
+                it.copy(
+                    currentChatId = current.id,
+                    chatSessions = sessions,
+                    messages = msgs
+                )
+            }
+        }
+    }
+
+    fun createNewChat() {
+        if (_uiState.value.isGenerating) {
+            stopGeneration()
+        }
+        val newId = UUID.randomUUID().toString()
+        val newSession = dbHelper.createSession(newId, "Новый чат")
+        val updatedList = listOf(newSession) + _uiState.value.chatSessions.filter { it.id != newId }
+        _uiState.update {
+            it.copy(
+                currentChatId = newId,
+                chatSessions = updatedList,
+                messages = emptyList(),
+                statusMessage = if (it.isModelLoaded) "Новый диалог создан" else it.statusMessage
+            )
+        }
+    }
+
+    fun selectChat(chatId: String) {
+        if (chatId == _uiState.value.currentChatId) return
+        if (_uiState.value.isGenerating) {
+            stopGeneration()
+        }
+        val msgs = dbHelper.getMessages(chatId)
+        _uiState.update {
+            it.copy(
+                currentChatId = chatId,
+                messages = msgs,
+                statusMessage = if (it.isModelLoaded) "Диалог загружен" else it.statusMessage
+            )
+        }
+    }
+
+    fun deleteChat(chatId: String) {
+        if (_uiState.value.isGenerating && chatId == _uiState.value.currentChatId) {
+            stopGeneration()
+        }
+        dbHelper.deleteSession(chatId)
+        val sessions = dbHelper.getAllSessions()
+        if (sessions.isEmpty()) {
+            createNewChat()
+        } else {
+            val nextSession = sessions.first()
+            val msgs = dbHelper.getMessages(nextSession.id)
+            _uiState.update {
+                it.copy(
+                    currentChatId = nextSession.id,
+                    chatSessions = sessions,
+                    messages = msgs
+                )
+            }
+        }
     }
 
     override fun onCleared() {
@@ -376,6 +461,24 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
             isStreaming = true
         )
 
+        val currentChatId = _uiState.value.currentChatId.ifBlank {
+            val newId = UUID.randomUUID().toString()
+            dbHelper.createSession(newId, "Новый чат")
+            newId
+        }
+
+        // Сохраняем сообщение пользователя в БД
+        dbHelper.saveMessage(currentChatId, userMessage)
+
+        // Обновляем заголовок чата, если он еще стандартный
+        val currentSession = _uiState.value.chatSessions.find { it.id == currentChatId }
+        if (currentSession == null || currentSession.title == "Новый чат") {
+            val newTitle = prompt.replace("\n", " ").trim().take(30) + if (prompt.length > 30) "..." else ""
+            dbHelper.updateSessionTitle(currentChatId, newTitle)
+            val updatedSessions = dbHelper.getAllSessions()
+            _uiState.update { it.copy(chatSessions = updatedSessions) }
+        }
+
         val previousMessages = _uiState.value.messages
         val updatedMessages = previousMessages + userMessage + assistantMessage
         val assistantMsgId = assistantMessage.id
@@ -481,21 +584,29 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
             val totalElapsed = (System.currentTimeMillis() - startTime) / 1000f
             val finalSpeed = if (totalElapsed > 0.05f) tokenCount / totalElapsed else 0.0f
+            val finalText = responseBuilder.toString()
+
+            val completedMsg = ChatMessage(
+                id = assistantMsgId,
+                role = MessageRole.ASSISTANT,
+                text = finalText,
+                tokensPerSec = finalSpeed,
+                isStreaming = false
+            )
+            dbHelper.saveMessage(currentChatId, completedMsg)
+            val refreshedSessions = dbHelper.getAllSessions()
 
             _uiState.update { current ->
                 val msgs = current.messages.map { m ->
                     if (m.id == assistantMsgId) {
-                        m.copy(
-                            text = responseBuilder.toString(),
-                            tokensPerSec = finalSpeed,
-                            isStreaming = false
-                        )
+                        completedMsg
                     } else {
                         m
                     }
                 }
                 current.copy(
                     messages = msgs,
+                    chatSessions = refreshedSessions,
                     isGenerating = false,
                     statusMessage = "Готово. Токенов: $tokenCount (~${String.format("%.1f", finalSpeed)} tok/s)",
                     tokensPerSecond = finalSpeed,
@@ -510,11 +621,25 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         if (_uiState.value.isGenerating) {
             stopGeneration()
         }
-        _uiState.update {
-            it.copy(
-                messages = emptyList(),
-                statusMessage = if (it.isModelLoaded) "Диалог очищен" else "Выберите модель GGUF в памяти смартфона"
-            )
+        val currentId = _uiState.value.currentChatId
+        if (currentId.isNotBlank()) {
+            dbHelper.deleteSession(currentId)
+            val newSession = dbHelper.createSession(currentId, "Новый чат")
+            val refreshed = dbHelper.getAllSessions()
+            _uiState.update {
+                it.copy(
+                    chatSessions = refreshed,
+                    messages = emptyList(),
+                    statusMessage = if (it.isModelLoaded) "Диалог очищен" else "Выберите модель GGUF в памяти смартфона"
+                )
+            }
+        } else {
+            _uiState.update {
+                it.copy(
+                    messages = emptyList(),
+                    statusMessage = if (it.isModelLoaded) "Диалог очищен" else "Выберите модель GGUF в памяти смартфона"
+                )
+            }
         }
     }
 
@@ -546,9 +671,18 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopGeneration() {
         LlamaBridge.nativeStop()
+        val currentId = _uiState.value.currentChatId
         _uiState.update { current ->
             val msgs = current.messages.map { m ->
-                if (m.isStreaming) m.copy(isStreaming = false) else m
+                if (m.isStreaming) {
+                    val stopped = m.copy(isStreaming = false)
+                    if (currentId.isNotBlank() && stopped.text.isNotBlank()) {
+                        dbHelper.saveMessage(currentId, stopped)
+                    }
+                    stopped
+                } else {
+                    m
+                }
             }
             current.copy(
                 messages = msgs,
