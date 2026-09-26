@@ -230,6 +230,67 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatPrompt(
 }
 
 JNIEXPORT jstring JNICALL
+Java_com_klischa_llmnotes_LlamaBridge_nativeFormatChat(
+    JNIEnv *env,
+    jobject thiz,
+    jobjectArray roles_arr,
+    jobjectArray contents_arr
+) {
+    if (!roles_arr || !contents_arr) {
+        return env->NewStringUTF("");
+    }
+
+    int n_msgs = env->GetArrayLength(roles_arr);
+    if (n_msgs <= 0) {
+        return env->NewStringUTF("");
+    }
+
+    std::vector<std::string> roles(n_msgs);
+    std::vector<std::string> contents(n_msgs);
+    std::vector<llama_chat_message> chat(n_msgs);
+
+    for (int i = 0; i < n_msgs; i++) {
+        jstring r_str = (jstring)env->GetObjectArrayElement(roles_arr, i);
+        jstring c_str = (jstring)env->GetObjectArrayElement(contents_arr, i);
+
+        const char * r_chars = r_str ? env->GetStringUTFChars(r_str, nullptr) : "";
+        const char * c_chars = c_str ? env->GetStringUTFChars(c_str, nullptr) : "";
+
+        roles[i] = r_chars ? r_chars : "";
+        contents[i] = c_chars ? c_chars : "";
+
+        if (r_str && r_chars) env->ReleaseStringUTFChars(r_str, r_chars);
+        if (c_str && c_chars) env->ReleaseStringUTFChars(c_str, c_chars);
+
+        if (r_str) env->DeleteLocalRef(r_str);
+        if (c_str) env->DeleteLocalRef(c_str);
+
+        chat[i].role = roles[i].c_str();
+        chat[i].content = contents[i].c_str();
+    }
+
+    if (g_model) {
+        int32_t req_len = llama_chat_apply_template(g_model, nullptr, chat.data(), chat.size(), true, nullptr, 0);
+        if (req_len > 0) {
+            std::vector<char> buf(req_len + 1, 0);
+            int32_t res_len = llama_chat_apply_template(g_model, nullptr, chat.data(), chat.size(), true, buf.data(), buf.size());
+            if (res_len > 0) {
+                return env->NewStringUTF(std::string(buf.data(), res_len).c_str());
+            }
+        }
+    }
+
+    // Резервный формат ChatML при отсутствии шаблона в метаданных модели
+    std::string fallback = "";
+    for (int i = 0; i < n_msgs; i++) {
+        fallback += "<|im_start|>" + roles[i] + "\n" + contents[i] + "<|im_end|>\n";
+    }
+    fallback += "<|im_start|>assistant\n";
+
+    return env->NewStringUTF(fallback.c_str());
+}
+
+JNIEXPORT jstring JNICALL
 Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
     JNIEnv *env,
     jobject thiz,

@@ -7,18 +7,23 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,9 +34,14 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.klischa.llmnotes.ChatMessage
 import com.klischa.llmnotes.LLMViewModel
+import com.klischa.llmnotes.MessageRole
 import com.klischa.llmnotes.SystemPromptPreset
 import com.klischa.llmnotes.UiState
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun ChatScreen(
@@ -39,9 +49,16 @@ fun ChatScreen(
     onSelectModelClick: () -> Unit
 ) {
     val uiState = viewModel.uiState.collectAsState().value
-    val scrollState = rememberScrollState()
+    val listState = rememberLazyListState()
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
+
+    // Автоматическая прокрутка к последнему сообщению при получении новых токенов
+    LaunchedEffect(uiState.messages.size, uiState.messages.lastOrNull()?.text) {
+        if (uiState.messages.isNotEmpty()) {
+            listState.animateScrollToItem(uiState.messages.size - 1)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -53,19 +70,42 @@ fun ChatScreen(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            text = "Офлайн ассистент • Helio G99",
+                            text = if (uiState.isModelLoaded) uiState.modelPath else "Офлайн ассистент • Helio G99",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
                         )
                     }
                 },
                 actions = {
+                    // Кнопка настройки системного промпта
+                    IconButton(onClick = { viewModel.toggleSystemPromptExpanded() }) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Системный промпт",
+                            tint = if (uiState.isSystemPromptExpanded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    // Выбор GGUF модели
                     IconButton(onClick = onSelectModelClick) {
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = "Выбрать GGUF"
                         )
                     }
+
+                    // Очистить историю диалога
+                    if (uiState.messages.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.clearChat() }) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Очистить чат"
+                            )
+                        }
+                    }
+
+                    // Выгрузить модель
                     if (uiState.isModelLoaded) {
                         IconButton(onClick = { viewModel.unloadModel() }) {
                             Icon(
@@ -86,259 +126,74 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .verticalScroll(scrollState),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .imePadding()
         ) {
-            // 1. Панель мониторинга устройства и статуса
-            DeviceInfoCard(uiState, viewModel)
-
-            // 2. Настройка универсального системного промпта
-            SystemPromptCard(uiState, viewModel)
-
-            // 3. Вкладки режима работы
-            TabRow(selectedTabIndex = uiState.selectedTab) {
-                Tab(
-                    selected = uiState.selectedTab == 0,
-                    onClick = { viewModel.setSelectedTab(0) },
-                    text = { Text("Заметки и Саммари") }
-                )
-                Tab(
-                    selected = uiState.selectedTab == 1,
-                    onClick = { viewModel.setSelectedTab(1) },
-                    text = { Text("Вопрос-Ответ") }
-                )
-            }
-
-            // 4. Поле ввода текста (заметка или вопрос)
-            OutlinedTextField(
-                value = uiState.inputText,
-                onValueChange = { viewModel.updateInputText(it) },
-                label = {
-                    Text(
-                        if (uiState.selectedTab == 0) "Текст заметки или конспекта"
-                        else "Ваш вопрос ассистенту"
-                    )
-                },
-                placeholder = {
-                    Text(
-                        if (uiState.selectedTab == 0) "Вставьте текст для анализа или конспектирования..."
-                        else "Спросите о чем угодно на русском языке..."
-                    )
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 120.dp, max = 220.dp),
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            // 5. Панель быстрых действий для заметок
-            if (uiState.selectedTab == 0) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { viewModel.generateSummary() },
-                        enabled = uiState.isModelLoaded && !uiState.isGenerating && uiState.inputText.isNotBlank(),
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
-                    ) {
-                        Text("Выжимка", fontSize = 13.sp)
-                    }
-                    Button(
-                        onClick = { viewModel.extractActionItems() },
-                        enabled = uiState.isModelLoaded && !uiState.isGenerating && uiState.inputText.isNotBlank(),
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
-                    ) {
-                        Text("Задачи", fontSize = 13.sp)
-                    }
-                    Button(
-                        onClick = { viewModel.formatAndClean() },
-                        enabled = uiState.isModelLoaded && !uiState.isGenerating && uiState.inputText.isNotBlank(),
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
-                    ) {
-                        Text("Оформить", fontSize = 13.sp)
-                    }
-                }
-            } else {
-                Button(
-                    onClick = { viewModel.askQuestion() },
-                    enabled = uiState.isModelLoaded && !uiState.isGenerating && uiState.inputText.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Задать вопрос")
-                }
-            }
-
-            // Кнопка остановки генерации
-            if (uiState.isGenerating) {
-                OutlinedButton(
-                    onClick = { viewModel.stopGeneration() },
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Остановить генерацию")
-                }
-            }
-
-            // 6. Карточка результата
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Ответ ассистента:",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
-                        )
-
-                        if (uiState.outputText.isNotBlank()) {
-                            IconButton(onClick = {
-                                clipboardManager.setText(AnnotatedString(uiState.outputText))
-                                Toast.makeText(context, "Скопировано в буфер!", Toast.LENGTH_SHORT).show()
-                            }) {
-                                Icon(
-                                    imageVector = Icons.Default.Share,
-                                    contentDescription = "Копировать",
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    if (uiState.outputText.isBlank()) {
-                        Text(
-                            text = if (uiState.isGenerating) "Генерация ответа..." else "Здесь появится ответ ассистента.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        SelectionContainer {
-                            Text(
-                                text = uiState.outputText,
-                                style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Статус-бар внизу
-            Text(
-                text = "Статус: ${uiState.statusMessage}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-fun SystemPromptCard(uiState: UiState, viewModel: LLMViewModel) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-        )
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { viewModel.toggleSystemPromptExpanded() },
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Системный промпт (Универсальный)",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                }
-
-                Text(
-                    text = if (uiState.isSystemPromptExpanded) "Скрыть ▲" else "Изменить ▼",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-
+            // 1. Панель параметров системного промпта
             AnimatedVisibility(visible = uiState.isSystemPromptExpanded) {
-                Column(modifier = Modifier.padding(top = 8.dp)) {
-                    // Пресеты
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                SystemPromptCard(uiState, viewModel)
+            }
+
+            // 2. Информационная плашка статуса модели и производительности
+            DeviceStatusStrip(uiState, viewModel)
+
+            // 3. Область сообщений чата
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                if (uiState.messages.isEmpty()) {
+                    EmptyChatPlaceholder(uiState, viewModel, onSelectModelClick)
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        SystemPromptPreset.values().forEach { preset ->
-                            FilterChip(
-                                selected = uiState.systemPrompt == preset.prompt,
-                                onClick = { viewModel.applyPreset(preset) },
-                                label = { Text(preset.title, fontSize = 11.sp) },
-                                modifier = Modifier.padding(vertical = 2.dp)
+                        items(uiState.messages, key = { it.id }) { message ->
+                            ChatMessageBubble(
+                                message = message,
+                                onCopyClick = {
+                                    clipboardManager.setText(AnnotatedString(message.text))
+                                    Toast.makeText(context, "Текст скопирован", Toast.LENGTH_SHORT).show()
+                                }
                             )
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    OutlinedTextField(
-                        value = uiState.systemPrompt,
-                        onValueChange = { viewModel.updateSystemPrompt(it) },
-                        label = { Text("Инструкция поведения (для любых моделей GGUF)", fontSize = 11.sp) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 80.dp, max = 160.dp),
-                        textStyle = MaterialTheme.typography.bodySmall
-                    )
                 }
             }
+
+            // 4. Панель быстрых подсказок (саммари, задачи, markdown)
+            QuickPromptChips(
+                isModelLoaded = uiState.isModelLoaded,
+                onChipClick = { type -> viewModel.insertNotePrompt(type) }
+            )
+
+            // 5. Поле ввода сообщения и кнопка отправки/остановки
+            ChatInputBar(
+                uiState = uiState,
+                onInputTextChange = { viewModel.updateInputText(it) },
+                onSendClick = { viewModel.sendMessage() },
+                onStopClick = { viewModel.stopGeneration() }
+            )
         }
     }
 }
 
 @Composable
-fun DeviceInfoCard(uiState: UiState, viewModel: LLMViewModel) {
+fun DeviceStatusStrip(uiState: UiState, viewModel: LLMViewModel) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
         )
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -347,73 +202,127 @@ fun DeviceInfoCard(uiState: UiState, viewModel: LLMViewModel) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(10.dp)
+                            .size(9.dp)
                             .background(
                                 when {
                                     uiState.isModelLoaded -> Color(0xFF4CAF50)
                                     uiState.isLoadingModel -> Color(0xFF2196F3)
                                     else -> Color(0xFFFF9800)
                                 },
-                                shape = RoundedCornerShape(5.dp)
+                                shape = CircleShape
                             )
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = when {
-                            uiState.isModelLoaded -> "Модель: ${uiState.modelPath}"
-                            uiState.isLoadingModel -> "Загрузка..."
+                            uiState.isModelLoaded -> "Модель активна"
+                            uiState.isLoadingModel -> "Загрузка модели..."
                             else -> "Модель не выбрана"
                         },
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
                     )
                 }
 
-                Text(
-                    text = "RAM: ~${uiState.allocatedRamMb} МБ",
-                    style = MaterialTheme.typography.labelSmall
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "RAM: ~${uiState.allocatedRamMb} МБ",
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "${String.format("%.1f", uiState.tokensPerSecond)} tok/s",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
 
             if (uiState.isLoadingModel) {
-                Spacer(modifier = Modifier.height(6.dp))
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Spacer(modifier = Modifier.height(4.dp))
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Сообщение о статусе или ошибке
+            // Текст статуса или ошибки
             val isError = !uiState.isModelLoaded && !uiState.isLoadingModel &&
                           (uiState.statusMessage.contains("Ошибка") ||
                            uiState.statusMessage.contains("не найден") ||
-                           uiState.statusMessage.contains("поврежден") ||
+                           uiState.statusMessage.contains("не поддерживается") ||
                            uiState.statusMessage.contains("Недостаточно"))
+            if (uiState.statusMessage.isNotBlank()) {
+                Text(
+                    text = uiState.statusMessage,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                    color = when {
+                        isError -> MaterialTheme.colorScheme.error
+                        uiState.isLoadingModel -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun SystemPromptCard(uiState: UiState, viewModel: LLMViewModel) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
             Text(
-                text = uiState.statusMessage,
-                style = MaterialTheme.typography.bodySmall,
-                color = when {
-                    isError -> MaterialTheme.colorScheme.error
-                    uiState.isLoadingModel -> MaterialTheme.colorScheme.primary
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                }
+                text = "Системный промпт диалога:",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
             )
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
+            // Пресеты
             Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                SystemPromptPreset.values().forEach { preset ->
+                    FilterChip(
+                        selected = uiState.systemPrompt == preset.prompt,
+                        onClick = { viewModel.applyPreset(preset) },
+                        label = { Text(preset.title, fontSize = 11.sp) },
+                        modifier = Modifier.padding(vertical = 1.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            OutlinedTextField(
+                value = uiState.systemPrompt,
+                onValueChange = { viewModel.updateSystemPrompt(it) },
+                label = { Text("Пользовательская инструкция") },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 70.dp, max = 130.dp),
+                shape = RoundedCornerShape(10.dp)
+            )
+
+            // Переключатель потоков
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Скорость: ${String.format("%.1f", uiState.tokensPerSecond)} tok/s",
-                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
+                    text = "Потоки (Helio G99 оптимум: 2):",
+                    style = MaterialTheme.typography.labelSmall
                 )
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Потоки:", style = MaterialTheme.typography.labelSmall)
-                    Spacer(modifier = Modifier.width(4.dp))
+                Row {
                     listOf(2, 3, 4).forEach { count ->
                         FilterChip(
                             selected = uiState.threadCount == count,
@@ -422,6 +331,308 @@ fun DeviceInfoCard(uiState: UiState, viewModel: LLMViewModel) {
                             modifier = Modifier.padding(horizontal = 2.dp)
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun EmptyChatPlaceholder(
+    uiState: UiState,
+    viewModel: LLMViewModel,
+    onSelectModelClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Офлайн-чат с LLM",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (uiState.isModelLoaded)
+                            "Модель готова к диалогу. Введите сообщение ниже или выберите готовую тему."
+                        else
+                            "Загрузите GGUF-модель (Qwen 2.5 1.5B/3B, Llama 3.2), чтобы начать общение.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (!uiState.isModelLoaded) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = onSelectModelClick,
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Выбрать файл .gguf")
+                        }
+                    }
+                }
+            }
+
+            // Быстрые карточки для старта
+            if (uiState.isModelLoaded) {
+                Text(
+                    text = "Идеи для запросов:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                val suggestions = listOf(
+                    "📝 Сделай краткое резюме текста...",
+                    "✅ Составь список задач (Action Items)...",
+                    "💡 Объясни простыми словами квантовую физику",
+                    "✨ Отредактируй и красиво оформи заметку..."
+                )
+
+                suggestions.forEach { suggestion ->
+                    OutlinedButton(
+                        onClick = { viewModel.updateInputText(suggestion) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = suggestion,
+                            fontSize = 12.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ChatMessageBubble(
+    message: ChatMessage,
+    onCopyClick: () -> Unit
+) {
+    val isUser = message.role == MessageRole.USER
+    val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+    val timeStr = timeFormat.format(Date(message.timestamp))
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        Card(
+            shape = if (isUser) {
+                RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)
+            } else {
+                RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp)
+            },
+            colors = CardDefaults.cardColors(
+                containerColor = if (isUser) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                }
+            ),
+            modifier = Modifier.widthIn(min = 80.dp, max = 320.dp)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                // Роль собеседника
+                Text(
+                    text = if (isUser) "Вы" else "Ассистент",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Текст сообщения
+                SelectionContainer {
+                    Text(
+                        text = if (message.text.isEmpty() && message.isStreaming) "▌" else message.text,
+                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp),
+                        color = if (isUser) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Нижняя строка: скорость, кнопка копирования и время
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (!isUser && message.tokensPerSec != null && message.tokensPerSec > 0) {
+                        Text(
+                            text = "${String.format("%.1f", message.tokensPerSec)} tok/s",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!isUser && message.text.isNotBlank()) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Копировать",
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .clickable { onCopyClick() },
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+
+                        Text(
+                            text = timeStr,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun QuickPromptChips(
+    isModelLoaded: Boolean,
+    onChipClick: (String) -> Unit
+) {
+    LazyRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        item {
+            SuggestionChip(
+                onClick = { onChipClick("summary") },
+                label = { Text("📝 Саммари", fontSize = 11.sp) },
+                enabled = isModelLoaded
+            )
+        }
+        item {
+            SuggestionChip(
+                onClick = { onChipClick("tasks") },
+                label = { Text("✅ Задачи", fontSize = 11.sp) },
+                enabled = isModelLoaded
+            )
+        }
+        item {
+            SuggestionChip(
+                onClick = { onChipClick("format") },
+                label = { Text("✨ Markdown", fontSize = 11.sp) },
+                enabled = isModelLoaded
+            )
+        }
+        item {
+            SuggestionChip(
+                onClick = { onChipClick("explain") },
+                label = { Text("💡 Объясни", fontSize = 11.sp) },
+                enabled = isModelLoaded
+            )
+        }
+    }
+}
+
+@Composable
+fun ChatInputBar(
+    uiState: UiState,
+    onInputTextChange: (String) -> Unit,
+    onSendClick: () -> Unit,
+    onStopClick: () -> Unit
+) {
+    Surface(
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = uiState.inputText,
+                onValueChange = onInputTextChange,
+                placeholder = {
+                    Text(
+                        if (uiState.isModelLoaded) "Сообщение ассистенту..."
+                        else "Сначала выберите модель GGUF..."
+                    )
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 52.dp, max = 130.dp),
+                shape = RoundedCornerShape(22.dp),
+                enabled = uiState.isModelLoaded && !uiState.isGenerating
+            )
+
+            if (uiState.isGenerating) {
+                IconButton(
+                    onClick = onStopClick,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(MaterialTheme.colorScheme.errorContainer, CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Остановить",
+                        tint = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+            } else {
+                IconButton(
+                    onClick = onSendClick,
+                    enabled = uiState.isModelLoaded && uiState.inputText.isNotBlank(),
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(
+                            if (uiState.isModelLoaded && uiState.inputText.isNotBlank()) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant
+                            },
+                            CircleShape
+                        )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Send,
+                        contentDescription = "Отправить",
+                        tint = if (uiState.isModelLoaded && uiState.inputText.isNotBlank()) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        }
+                    )
                 }
             }
         }

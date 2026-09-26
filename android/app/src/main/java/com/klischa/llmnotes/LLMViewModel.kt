@@ -16,6 +16,21 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
+import java.util.UUID
+
+enum class MessageRole {
+    USER,
+    ASSISTANT
+}
+
+data class ChatMessage(
+    val id: String = UUID.randomUUID().toString(),
+    val role: MessageRole,
+    val text: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val tokensPerSec: Float? = null,
+    val isStreaming: Boolean = false
+)
 
 enum class SystemPromptPreset(val title: String, val prompt: String) {
     UNIVERSAL(
@@ -47,7 +62,7 @@ data class UiState(
     val modelPath: String = "",
     val isGenerating: Boolean = false,
     val inputText: String = "",
-    val outputText: String = "",
+    val messages: List<ChatMessage> = emptyList(),
     val systemPrompt: String = SystemPromptPreset.UNIVERSAL.prompt,
     val isSystemPromptExpanded: Boolean = false,
     val statusMessage: String = "Выберите модель GGUF в памяти смартфона",
@@ -57,8 +72,7 @@ data class UiState(
     val allocatedRamMb: Long = 0,
     val threadCount: Int = 2, // Оптимум 2 ядра Cortex-A76 для Helio G99
     val temperature: Float = 0.3f,
-    val topP: Float = 0.85f,
-    val selectedTab: Int = 0 // 0: Заметки и саммари, 1: Вопрос-ответ
+    val topP: Float = 0.85f
 )
 
 class LLMViewModel(application: Application) : AndroidViewModel(application) {
@@ -95,10 +109,6 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(isSystemPromptExpanded = !it.isSystemPromptExpanded) }
     }
 
-    fun setSelectedTab(index: Int) {
-        _uiState.update { it.copy(selectedTab = index) }
-    }
-
     fun setThreadCount(threads: Int) {
         _uiState.update { it.copy(threadCount = threads) }
     }
@@ -109,8 +119,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Загрузка модели из URI Android Storage Access Framework (SAF).
-     * Приоритет отдается мгновенной загрузке через прямой путь / FileDescriptor
-     * без дублирования файла и расхода дисковой памяти.
+     * Приоритет отдается прямому чтению без копирования.
      */
     fun loadModelUri(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -124,7 +133,6 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            // Закрываем предыдущий дескриптор, если был открыт
             openPfd?.close()
             openPfd = null
 
@@ -137,14 +145,13 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // Способ 2: Открытие через File Descriptor (SAF proc/self/fd) - без копирования
+            // Способ 2: Открытие через File Descriptor (SAF proc/self/fd)
             try {
                 val pfd = contentResolver.openFileDescriptor(uri, "r")
                 if (pfd != null) {
                     val fd = pfd.fd
                     val fdPath = "/proc/self/fd/$fd"
 
-                    // Проверяем, можно ли определить реальный путь через readlink
                     val realPath = try {
                         android.system.Os.readlink(fdPath)
                     } catch (e: Exception) {
@@ -157,7 +164,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                         realPath
                     } else {
                         Log.i(TAG, "Используем дескриптор SAF: $fdPath")
-                        openPfd = pfd // Удерживаем дескриптор открытым на время работы модели
+                        openPfd = pfd
                         fdPath
                     }
 
@@ -352,64 +359,93 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         return Pair(name, size)
     }
 
-    fun generateSummary() {
-        val note = _uiState.value.inputText.trim()
-        if (note.isEmpty()) return
-        val userPrompt = "Сделай краткое резюме заметки:\n\n$note"
-        runPrompt(userPrompt)
-    }
+    /**
+     * Отправка сообщения в чат с сохранением многошаговой истории диалога (Multi-turn chat).
+     */
+    fun sendMessage(userText: String = _uiState.value.inputText) {
+        val prompt = userText.trim()
+        if (prompt.isEmpty() || !_uiState.value.isModelLoaded || _uiState.value.isGenerating) return
 
-    fun extractActionItems() {
-        val note = _uiState.value.inputText.trim()
-        if (note.isEmpty()) return
-        val userPrompt = "Выдели четкий список задач (Action Items) с чекбоксами из следующего текста:\n\n$note"
-        runPrompt(userPrompt)
-    }
+        val userMessage = ChatMessage(
+            role = MessageRole.USER,
+            text = prompt
+        )
+        val assistantMessage = ChatMessage(
+            role = MessageRole.ASSISTANT,
+            text = "",
+            isStreaming = true
+        )
 
-    fun formatAndClean() {
-        val note = _uiState.value.inputText.trim()
-        if (note.isEmpty()) return
-        val userPrompt = "Отредактируй и красиво структурируй текст заметки в Markdown:\n\n$note"
-        runPrompt(userPrompt)
-    }
+        val previousMessages = _uiState.value.messages
+        val updatedMessages = previousMessages + userMessage + assistantMessage
+        val assistantMsgId = assistantMessage.id
 
-    fun askQuestion() {
-        val q = _uiState.value.inputText.trim()
-        if (q.isEmpty()) return
-        runPrompt(q)
-    }
+        _uiState.update {
+            it.copy(
+                inputText = "",
+                messages = updatedMessages,
+                isGenerating = true,
+                statusMessage = "Генерация ответа...",
+                tokensPerSecond = 0.0f,
+                totalTokensGenerated = 0
+            )
+        }
 
-    private fun runPrompt(userPrompt: String) {
-        if (!_uiState.value.isModelLoaded || _uiState.value.isGenerating) return
+        // Собираем историю диалога для модели (последние 10 сообщений для экономии контекста)
+        val historyLimit = 10
+        val historyForPrompt = previousMessages.takeLast(historyLimit)
 
-        // Автоматическое форматирование промпта под архитектуру загруженной GGUF модели
-        val formattedPrompt = LlamaBridge.nativeFormatPrompt(
-            _uiState.value.systemPrompt,
-            userPrompt
+        val rolesList = mutableListOf<String>()
+        val contentsList = mutableListOf<String>()
+
+        // 1. Системный промпт
+        if (_uiState.value.systemPrompt.isNotBlank()) {
+            rolesList.add("system")
+            contentsList.add(_uiState.value.systemPrompt.trim())
+        }
+
+        // 2. История предыдущих реплик
+        for (msg in historyForPrompt) {
+            if (msg.role == MessageRole.USER) {
+                rolesList.add("user")
+                contentsList.add(msg.text)
+            } else if (msg.role == MessageRole.ASSISTANT && msg.text.isNotBlank()) {
+                rolesList.add("assistant")
+                contentsList.add(msg.text)
+            }
+        }
+
+        // 3. Текущее сообщение пользователя
+        rolesList.add("user")
+        contentsList.add(prompt)
+
+        val formattedPrompt = LlamaBridge.nativeFormatChat(
+            rolesList.toTypedArray(),
+            contentsList.toTypedArray()
         )
 
         viewModelScope.launch(Dispatchers.Default) {
-            _uiState.update {
-                it.copy(
-                    isGenerating = true,
-                    outputText = "",
-                    statusMessage = "Генерация ответа...",
-                    tokensPerSecond = 0.0f,
-                    totalTokensGenerated = 0
-                )
-            }
-
             val startTime = System.currentTimeMillis()
             var tokenCount = 0
+            val responseBuilder = StringBuilder()
 
             val callback = LlamaBridge.TokenCallback { tokenPiece ->
                 tokenCount++
+                responseBuilder.append(tokenPiece)
+                val currentText = responseBuilder.toString()
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
                 val speed = if (elapsedSec > 0.05f) tokenCount / elapsedSec else 0.0f
 
                 _uiState.update { current ->
+                    val msgs = current.messages.map { m ->
+                        if (m.id == assistantMsgId) {
+                            m.copy(text = currentText, tokensPerSec = speed, isStreaming = true)
+                        } else {
+                            m
+                        }
+                    }
                     current.copy(
-                        outputText = current.outputText + tokenPiece,
+                        messages = msgs,
                         totalTokensGenerated = tokenCount,
                         tokensPerSecond = speed,
                         generationTimeSeconds = elapsedSec
@@ -419,7 +455,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
             LlamaBridge.nativeGenerate(
                 formattedPrompt,
-                512,
+                1024,
                 _uiState.value.temperature,
                 _uiState.value.topP,
                 callback
@@ -428,8 +464,20 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
             val totalElapsed = (System.currentTimeMillis() - startTime) / 1000f
             val finalSpeed = if (totalElapsed > 0.05f) tokenCount / totalElapsed else 0.0f
 
-            _uiState.update {
-                it.copy(
+            _uiState.update { current ->
+                val msgs = current.messages.map { m ->
+                    if (m.id == assistantMsgId) {
+                        m.copy(
+                            text = responseBuilder.toString(),
+                            tokensPerSec = finalSpeed,
+                            isStreaming = false
+                        )
+                    } else {
+                        m
+                    }
+                }
+                current.copy(
+                    messages = msgs,
                     isGenerating = false,
                     statusMessage = "Готово. Токенов: $tokenCount (~${String.format("%.1f", finalSpeed)} tok/s)",
                     tokensPerSecond = finalSpeed,
@@ -440,10 +488,39 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun stopGeneration() {
-        LlamaBridge.nativeStop()
+    fun clearChat() {
+        if (_uiState.value.isGenerating) {
+            stopGeneration()
+        }
         _uiState.update {
             it.copy(
+                messages = emptyList(),
+                statusMessage = if (it.isModelLoaded) "Диалог очищен" else "Выберите модель GGUF в памяти смартфона"
+            )
+        }
+    }
+
+    fun insertNotePrompt(type: String) {
+        val prefix = when (type) {
+            "summary" -> "Сделай краткое структурированное резюме следующего текста:\n\n"
+            "tasks" -> "Выдели четкий список задач (Action Items) с чекбоксами [ ] из следующего текста:\n\n"
+            "format" -> "Отредактируй и красиво структурируй текст в формате Markdown:\n\n"
+            "explain" -> "Объясни простыми словами следующую тему:\n\n"
+            else -> ""
+        }
+        _uiState.update {
+            it.copy(inputText = prefix + it.inputText)
+        }
+    }
+
+    fun stopGeneration() {
+        LlamaBridge.nativeStop()
+        _uiState.update { current ->
+            val msgs = current.messages.map { m ->
+                if (m.isStreaming) m.copy(isStreaming = false) else m
+            }
+            current.copy(
+                messages = msgs,
                 isGenerating = false,
                 statusMessage = "Генерация остановлена пользователем"
             )
