@@ -95,22 +95,25 @@ object OpenCodeClient {
         "deepseek-v3"
     )
 
-    // Рекомендуемые модели для подписки OpenCode ZEN (бесплатные Free Tier вынесены в начало)
+    // Рекомендуемые модели для подписки OpenCode ZEN
     val ZEN_DEFAULT_MODELS = listOf(
-        "big-pickle",
-        "deepseek-v4-flash-free",
-        "space-bunny-free",
-        "mimo-v2.6-flash-free",
-        "mimo-v2.5-free",
-        "ling-3.0-flash-fin-free",
-        "nemotron-3.5-lightning-free",
-        "longcat-2.5-preview-free",
-        "deepseek-v4-pro",
-        "deepseek-v4-flash",
+        "qwen3.6-plus",
+        "qwen3.8-flash",
         "qwen3.8-max",
+        "claude-3-7-sonnet",
+        "claude-3-5-sonnet",
+        "claude-haiku-4-5",
+        "claude-fable-5-1",
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-5.6-luna",
+        "deepseek-r1",
+        "deepseek-v3",
         "minimax-m3",
-        "glm-5.3-flash",
-        "kimi-k2.6"
+        "glm-5.1",
+        "big-pickle",
+        "space-bunny-free",
+        "nemotron-3.5-lightning-free"
     )
 
     fun isFreeModel(provider: LLMProviderType, model: String): Boolean {
@@ -184,7 +187,7 @@ object OpenCodeClient {
                     }
                 }
             }
-            return if (list.isNotEmpty()) list.distinct().sorted() else getDefaultModels(provider)
+            return if (list.isNotEmpty()) (getDefaultModels(provider) + list).distinct().sorted() else getDefaultModels(provider)
         } catch (e: Exception) {
             Log.w(TAG, "Ошибка получения моделей OpenCode: ${e.message}")
             return getDefaultModels(provider)
@@ -269,9 +272,13 @@ object OpenCodeClient {
 
                 val tip = when (responseCode) {
                     401 -> "Неверный API-ключ. Проверьте, что ключ подходит для выбранной подписки (${provider.displayName})."
-                    403 -> "Доступ отклонен ($cleanErr). Проверьте активность подписки ${provider.displayName}."
+                    403 -> if (isFreeModel(provider, model)) {
+                        "Бесплатная промо-модель '$model' заблокирована шлюзом OpenCode для вашего платного API-ключа (HTTP 403).\n💡 Выберите стандартную модель из каталога (например, 'qwen3.6-plus', 'claude-3-7-sonnet', 'gpt-4o')."
+                    } else {
+                        "Доступ отклонен ($cleanErr). Проверьте активность подписки ${provider.displayName}."
+                    }
                     404 -> if (provider == LLMProviderType.OPENCODE_ZEN && !isFreeModel(provider, model)) {
-                        "Модель '$model' недоступна или требует платных кредитов OpenCode Zen (HTTP 404).\n💡 Выберите модель из бесплатного тарифа Free (например, 'big-pickle' или 'deepseek-v4-flash-free')."
+                        "Модель '$model' недоступна или маршрут не найден (HTTP 404).\n💡 Рекомендуем использовать проверенные рабочие модели: 'qwen3.6-plus', 'qwen3.8-flash', 'claude-3-7-sonnet', 'gpt-4o'."
                     } else {
                         "Модель '$model' не найдена или временно недоступна: $cleanErr"
                     }
@@ -283,6 +290,7 @@ object OpenCodeClient {
 
             val reader = BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8))
             var line: String?
+            var isThinking = false
             while (reader.readLine().also { line = it } != null) {
                 if (isCancelled()) break
                 val l = line?.trim() ?: continue
@@ -294,11 +302,28 @@ object OpenCodeClient {
                         val choices = chunkJson.optJSONArray("choices")
                         if (choices != null && choices.length() > 0) {
                             val delta = choices.getJSONObject(0).optJSONObject("delta")
-                            val content = delta?.optString("content", "") ?: ""
-                            val reasoning = delta?.optString("reasoning_content", "") ?: ""
-                            val tokenPiece = if (content.isNotEmpty()) content else reasoning
-                            if (tokenPiece.isNotEmpty()) {
-                                onToken(tokenPiece)
+                            val content = if (delta != null && !delta.isNull("content")) {
+                                val s = delta.optString("content", "")
+                                if (s == "null") "" else s
+                            } else ""
+
+                            val reasoning = if (delta != null && !delta.isNull("reasoning_content")) {
+                                val s = delta.optString("reasoning_content", "")
+                                if (s == "null") "" else s
+                            } else ""
+
+                            if (reasoning.isNotEmpty()) {
+                                if (!isThinking) {
+                                    isThinking = true
+                                    onToken("💭 *Размышления:*\n")
+                                }
+                                onToken(reasoning)
+                            } else if (content.isNotEmpty()) {
+                                if (isThinking) {
+                                    isThinking = false
+                                    onToken("\n\n---\n\n")
+                                }
+                                onToken(content)
                             }
                         }
                     } catch (_: Exception) {}

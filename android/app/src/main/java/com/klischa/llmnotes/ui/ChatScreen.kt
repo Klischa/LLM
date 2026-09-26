@@ -706,7 +706,7 @@ fun ProviderSettingsDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Модель из подписки:",
+                            text = "Модель (${uiState.openCodeAvailableModels.size} в списке):",
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
                         )
                         TextButton(
@@ -721,7 +721,7 @@ fun ProviderSettingsDialog(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 210.dp)
+                            .heightIn(max = 220.dp)
                             .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
@@ -769,10 +769,23 @@ fun ProviderSettingsDialog(
                         }
                     }
 
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Поле ввода произвольного имени модели
+                    OutlinedTextField(
+                        value = uiState.openCodeSelectedModel,
+                        onValueChange = { viewModel.setOpenCodeSelectedModel(it) },
+                        label = { Text("Выбранная модель (можно ввести вручную)", fontSize = 11.sp) },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+
                     if (uiState.providerType == LLMProviderType.OPENCODE_ZEN) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "💡 Модели с плашкой Free (big-pickle, deepseek-v4-flash-free и др.) доступны бесплатно. Платные модели требуют пополнения баланса.",
+                            text = "💡 Для платного аккаунта Zen рекомендуются: qwen3.6-plus, qwen3.8-flash, claude-3-7-sonnet, gpt-4o. Промо-модели Free предназначены для анонимного CLI.",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )

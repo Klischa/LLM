@@ -328,7 +328,7 @@ adb push models_gguf/qwen2.5-1.5b-q4_k_m.gguf /sdcard/Download/
 
 ---
 
-## 16. Подключение внешнего API OpenCode: подписки GO и ZEN (v1.2.4)
+## 16. Подключение внешнего API OpenCode: подписки GO и ZEN (v1.2.5)
 
 В приложении реализован гибридный режим работы (Офлайн GGUF + Облачные API):
 - **OpenCode GO**:
@@ -337,18 +337,19 @@ adb push models_gguf/qwen2.5-1.5b-q4_k_m.gguf /sdcard/Download/
   - Отдельное хранилище API-ключа для подписки OpenCode GO.
 - **OpenCode ZEN**:
   - Базовый эндпоинт: `https://opencode.ai/zen/v1`
-  - Преднастроенные бесплатные модели (**Free Tier** с плашкой `[Free]`): `big-pickle`, `deepseek-v4-flash-free`, `space-bunny-free`, `mimo-v2.6-flash-free`, `mimo-v2.5-free`, `ling-3.0-flash-fin-free`, `nemotron-3.5-lightning-free`, `longcat-2.5-preview-free`. Работают бесплатно без пополнения баланса!
-  - Модели со стандартной тарификацией (Standard Credits): `deepseek-v4-pro`, `deepseek-v4-flash`, `qwen3.8-max`, `minimax-m3`, `glm-5.3-flash`, `kimi-k2.6`.
+  - Поддерживаемые флагманские модели: `qwen3.6-plus`, `qwen3.8-flash`, `qwen3.8-max`, `claude-3-7-sonnet`, `claude-3-5-sonnet`, `claude-haiku-4-5`, `gpt-4o`, `gpt-4o-mini`, `gpt-5.6-luna`, `deepseek-r1`, `deepseek-v3`, `minimax-m3`, `glm-5.1`.
+  - Возможность ручного ввода имени любой поддерживаемой модели в UI диалоге.
   - Отдельное хранилище API-ключа для подписки OpenCode ZEN.
+- **Корректная обработка Reasoning/Thinking токенов**:
+  - Потоковый парсер SSE фильтрует null-поля JSON и отделяет рассуждения (`reasoning_content`) от основного ответа (`content`), предотвращая появление строк `nullnullnull`.
+  - Блок рассуждений (например, у моделей Qwen и DeepSeek R1) аккуратно обрамляется заголовком `💭 *Размышления:*` и разделителем перед финальным ответом.
 - **Точная эмуляция официального OpenCode CLI-клиента**:
   - Глобальное переопределение JVM User-Agent (`System.setProperty("http.agent", ...)`) исключает утечку заголовка Dalvik.
   - `User-Agent: opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14`.
   - `x-opencode-client: cli`, `x-opencode-project: global`.
   - Алгоритмическая генерация `x-opencode-session` (`ses_` с нисходящим инвертированным timestamp) и `x-opencode-request` (`msg_` с восходящим timestamp) + 14 Base62 символов, полностью удовлетворяющая проверке шлюза OpenCode Edge.
-  - Поддержка потокового рассуждения (`reasoning_content`) для моделей линейки DeepSeek-R1.
-  - Позволяет беспрепятственно использовать модели Free Tier (например, `big-pickle`, `deepseek-v4-flash-free`) без ошибки `403 OpenCode's free tier can only be used from within OpenCode`.
 - **Потоковый вывод токенов (SSE)**: Ответы через облачный API стримятся в реальном времени с измерением скорости (`tok/s`) точно так же, как локальная модель.
-- **Динамическое обновление каталога**: Кнопка «🔄 Обновить» опрашивает эндпоинт `/v1/models` по вашему API-ключу и подтягивает актуальный список доступных моделей подписки с серверов OpenCode.
+- **Динамическое объединение каталогов**: Кнопка «🔄 Обновить» опрашивает эндпоинт `/v1/models` и дополняет список моделей актуальными вариантами с серверов OpenCode.
 - **Интеграция с Device Tools и историей**: Все функции устройства (фото, память, заряд) и сохранение переписки в SQLite работают как для локальной модели, так и при общении через OpenCode.
 
 
