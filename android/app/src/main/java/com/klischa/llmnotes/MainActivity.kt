@@ -24,10 +24,19 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
+            try {
+                contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {}
+
             val directPath = getRealPathFromUri(it)
             if (directPath != null && File(directPath).canRead() && File(directPath).length() > 0) {
+                viewModel.saveLastModelInfo(directPath, it.toString(), File(directPath).name)
                 viewModel.loadModel(directPath)
             } else {
+                viewModel.saveLastModelInfo(null, it.toString(), "GGUF Модель")
                 viewModel.loadModelUri(it)
             }
         }
@@ -49,6 +58,9 @@ class MainActivity : ComponentActivity() {
 
         // 2. Запрос разрешения доступа ко всем файлам для прямого zero-copy чтения моделей
         checkAndRequestAllFilesAccess()
+
+        // 3. Автоматическая загрузка последней выбранной модели
+        viewModel.tryAutoLoadLastModel()
 
         setContent {
             LLMNotesTheme {

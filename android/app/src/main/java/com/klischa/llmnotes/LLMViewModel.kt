@@ -2,6 +2,7 @@ package com.klischa.llmnotes
 
 import android.app.Application
 import android.content.ContentResolver
+import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
@@ -87,6 +88,88 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val TAG = "LLMViewModel"
+        private const val PREFS_NAME = "llm_app_prefs"
+        private const val PREF_LAST_MODEL_PATH = "last_model_path"
+        private const val PREF_LAST_MODEL_URI = "last_model_uri"
+        private const val PREF_LAST_MODEL_NAME = "last_model_name"
+        private const val PREF_AUTO_LOAD_ENABLED = "auto_load_enabled"
+    }
+
+    fun saveLastModelInfo(directPath: String?, uriStr: String?, displayName: String) {
+        val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().apply {
+            if (directPath != null) {
+                putString(PREF_LAST_MODEL_PATH, directPath)
+            }
+            if (uriStr != null) {
+                putString(PREF_LAST_MODEL_URI, uriStr)
+            }
+            putString(PREF_LAST_MODEL_NAME, displayName)
+            putBoolean(PREF_AUTO_LOAD_ENABLED, true)
+            apply()
+        }
+    }
+
+    fun tryAutoLoadLastModel() {
+        if (_uiState.value.isModelLoaded || _uiState.value.isLoadingModel) return
+
+        val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val autoLoad = prefs.getBoolean(PREF_AUTO_LOAD_ENABLED, true)
+        if (!autoLoad) return
+
+        val lastPath = prefs.getString(PREF_LAST_MODEL_PATH, null)
+        val lastUriStr = prefs.getString(PREF_LAST_MODEL_URI, null)
+        val lastName = prefs.getString(PREF_LAST_MODEL_NAME, "модели") ?: "модели"
+
+        // Приоритет 1: сохраненный прямой путь к файлу (например /sdcard/Download/...)
+        if (!lastPath.isNullOrBlank()) {
+            val file = File(lastPath)
+            if (file.exists() && file.canRead() && file.length() > 0) {
+                Log.i(TAG, "Автозагрузка сохраненной модели по пути: $lastPath")
+                _uiState.update {
+                    it.copy(
+                        isLoadingModel = true,
+                        statusMessage = "Автозагрузка модели ($lastName)..."
+                    )
+                }
+                loadModel(lastPath)
+                return
+            }
+        }
+
+        // Приоритет 2: сохраненный URI SAF
+        if (!lastUriStr.isNullOrBlank()) {
+            try {
+                val uri = Uri.parse(lastUriStr)
+                Log.i(TAG, "Автозагрузка сохраненной модели по URI: $lastUriStr")
+                _uiState.update {
+                    it.copy(
+                        isLoadingModel = true,
+                        statusMessage = "Автозагрузка модели ($lastName)..."
+                    )
+                }
+                loadModelUri(uri)
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "Не удалось выполнить автозагрузку по URI: ${e.message}")
+            }
+        }
+
+        // Приоритет 3: поиск во внутренней папке models
+        val modelsDir = File(getApplication<Application>().filesDir, "models")
+        if (modelsDir.exists()) {
+            val cachedFile = modelsDir.listFiles()?.firstOrNull { it.extension.lowercase() == "gguf" && it.length() > 0 }
+            if (cachedFile != null) {
+                Log.i(TAG, "Автозагрузка модели из внутренней папки models: ${cachedFile.absolutePath}")
+                _uiState.update {
+                    it.copy(
+                        isLoadingModel = true,
+                        statusMessage = "Автозагрузка модели (${cachedFile.name})..."
+                    )
+                }
+                loadModel(cachedFile.absolutePath)
+            }
+        }
     }
 
     init {
@@ -264,6 +347,8 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                     )
 
                     if (error.isEmpty()) {
+                        val direct = if (File(pathToUse).exists() && File(pathToUse).length() > 0) pathToUse else null
+                        saveLastModelInfo(direct, uri.toString(), displayName)
                         _uiState.update {
                             it.copy(
                                 isModelLoaded = true,
@@ -327,10 +412,11 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            val cacheFile = File(appFilesDir, "model.gguf")
+            val modelsDir = File(appFilesDir, "models").apply { mkdirs() }
+            val cacheFile = File(modelsDir, displayName.ifBlank { "model.gguf" })
             try {
                 _uiState.update {
-                    it.copy(statusMessage = "Копирование модели во внутренний кэш...")
+                    it.copy(statusMessage = "Копирование модели в папку models...")
                 }
 
                 contentResolver.openInputStream(uri)?.use { input ->
@@ -386,6 +472,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         if (error.isEmpty()) {
+            saveLastModelInfo(path, null, displayName)
             _uiState.update {
                 it.copy(
                     isModelLoaded = true,
@@ -696,12 +783,18 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         LlamaBridge.nativeUnload()
         openPfd?.close()
         openPfd = null
+
+        val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(PREF_AUTO_LOAD_ENABLED, false).apply()
+
         _uiState.update {
             it.copy(
                 isModelLoaded = false,
                 isLoadingModel = false,
                 modelPath = "",
-                statusMessage = "Модель выгружена из памяти"
+                statusMessage = "Модель выгружена из памяти",
+                tokensPerSecond = 0.0f,
+                allocatedRamMb = 0
             )
         }
         updateRamUsage()
