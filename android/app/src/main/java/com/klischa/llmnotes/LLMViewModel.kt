@@ -9,6 +9,9 @@ import android.provider.OpenableColumns
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.klischa.llmnotes.api.ApiChatMessage
+import com.klischa.llmnotes.api.LLMProviderType
+import com.klischa.llmnotes.api.OpenCodeClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -66,6 +69,12 @@ data class UiState(
     val messages: List<ChatMessage> = emptyList(),
     val currentChatId: String = "",
     val chatSessions: List<com.klischa.llmnotes.data.ChatSession> = emptyList(),
+    val providerType: LLMProviderType = LLMProviderType.LOCAL_GGUF,
+    val openCodeApiKey: String = "",
+    val openCodeSelectedModel: String = "deepseek-v4-pro",
+    val openCodeAvailableModels: List<String> = OpenCodeClient.GO_DEFAULT_MODELS,
+    val isProviderDialogVisible: Boolean = false,
+    val isFetchingModels: Boolean = false,
     val systemPrompt: String = SystemPromptPreset.UNIVERSAL.prompt,
     val isSystemPromptExpanded: Boolean = false,
     val statusMessage: String = "Выберите модель GGUF в памяти смартфона",
@@ -76,7 +85,10 @@ data class UiState(
     val threadCount: Int = 2, // Оптимум 2 ядра Cortex-A76 для Helio G99
     val temperature: Float = 0.3f,
     val topP: Float = 0.85f
-)
+) {
+    val isReadyToChat: Boolean
+        get() = if (providerType == LLMProviderType.LOCAL_GGUF) isModelLoaded else openCodeApiKey.isNotBlank()
+}
 
 class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -85,6 +97,8 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
     private val dbHelper = com.klischa.llmnotes.data.ChatDatabaseHelper(application)
     private var openPfd: ParcelFileDescriptor? = null
+    @Volatile
+    private var isRemoteCancelled: Boolean = false
 
     companion object {
         private const val TAG = "LLMViewModel"
@@ -93,6 +107,10 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         private const val PREF_LAST_MODEL_URI = "last_model_uri"
         private const val PREF_LAST_MODEL_NAME = "last_model_name"
         private const val PREF_AUTO_LOAD_ENABLED = "auto_load_enabled"
+        private const val PREF_PROVIDER_TYPE = "provider_type"
+        private const val PREF_OPENCODE_API_KEY = "opencode_api_key"
+        private const val PREF_OPENCODE_MODEL_GO = "opencode_model_go"
+        private const val PREF_OPENCODE_MODEL_ZEN = "opencode_model_zen"
     }
 
     fun saveLastModelInfo(directPath: String?, uriStr: String?, displayName: String) {
@@ -174,6 +192,98 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         loadChatSessions()
+        initProviderSettings()
+    }
+
+    private fun initProviderSettings() {
+        val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val providerStr = prefs.getString(PREF_PROVIDER_TYPE, LLMProviderType.LOCAL_GGUF.name)
+        val provider = try { LLMProviderType.valueOf(providerStr ?: "") } catch (_: Exception) { LLMProviderType.LOCAL_GGUF }
+        val apiKey = prefs.getString(PREF_OPENCODE_API_KEY, "") ?: ""
+        val modelGo = prefs.getString(PREF_OPENCODE_MODEL_GO, "deepseek-v4-pro") ?: "deepseek-v4-pro"
+        val modelZen = prefs.getString(PREF_OPENCODE_MODEL_ZEN, "claude-3-7-sonnet") ?: "claude-3-7-sonnet"
+        val selectedModel = if (provider == LLMProviderType.OPENCODE_ZEN) modelZen else modelGo
+        val models = OpenCodeClient.getDefaultModels(provider)
+
+        _uiState.update {
+            it.copy(
+                providerType = provider,
+                openCodeApiKey = apiKey,
+                openCodeSelectedModel = selectedModel,
+                openCodeAvailableModels = models
+            )
+        }
+    }
+
+    fun setProviderType(type: LLMProviderType) {
+        val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(PREF_PROVIDER_TYPE, type.name).apply()
+
+        val selectedModel = when (type) {
+            LLMProviderType.OPENCODE_GO -> prefs.getString(PREF_OPENCODE_MODEL_GO, "deepseek-v4-pro") ?: "deepseek-v4-pro"
+            LLMProviderType.OPENCODE_ZEN -> prefs.getString(PREF_OPENCODE_MODEL_ZEN, "claude-3-7-sonnet") ?: "claude-3-7-sonnet"
+            LLMProviderType.LOCAL_GGUF -> ""
+        }
+        val defaultModels = OpenCodeClient.getDefaultModels(type)
+
+        _uiState.update {
+            it.copy(
+                providerType = type,
+                openCodeSelectedModel = selectedModel,
+                openCodeAvailableModels = defaultModels,
+                statusMessage = when (type) {
+                    LLMProviderType.LOCAL_GGUF -> if (it.isModelLoaded) "Локальная модель: ${it.modelPath}" else "Выберите модель GGUF в памяти смартфона"
+                    else -> "${type.displayName} готов к работе ($selectedModel)"
+                }
+            )
+        }
+
+        if (type != LLMProviderType.LOCAL_GGUF && _uiState.value.openCodeApiKey.isNotBlank()) {
+            fetchRemoteModels()
+        }
+    }
+
+    fun setOpenCodeApiKey(key: String) {
+        val cleanKey = key.trim()
+        val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(PREF_OPENCODE_API_KEY, cleanKey).apply()
+        _uiState.update { it.copy(openCodeApiKey = cleanKey) }
+        if (cleanKey.isNotBlank()) {
+            fetchRemoteModels()
+        }
+    }
+
+    fun setOpenCodeSelectedModel(model: String) {
+        val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val key = if (_uiState.value.providerType == LLMProviderType.OPENCODE_ZEN) PREF_OPENCODE_MODEL_ZEN else PREF_OPENCODE_MODEL_GO
+        prefs.edit().putString(key, model).apply()
+        _uiState.update {
+            it.copy(
+                openCodeSelectedModel = model,
+                statusMessage = "${it.providerType.displayName}: выбрана модель $model"
+            )
+        }
+    }
+
+    fun fetchRemoteModels() {
+        val provider = _uiState.value.providerType
+        val apiKey = _uiState.value.openCodeApiKey
+        if (provider == LLMProviderType.LOCAL_GGUF || apiKey.isBlank()) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isFetchingModels = true) }
+            val models = OpenCodeClient.fetchModels(provider, apiKey)
+            _uiState.update {
+                it.copy(
+                    isFetchingModels = false,
+                    openCodeAvailableModels = models
+                )
+            }
+        }
+    }
+
+    fun setProviderDialogVisible(visible: Boolean) {
+        _uiState.update { it.copy(isProviderDialogVisible = visible) }
     }
 
     private fun loadChatSessions() {
@@ -533,10 +643,23 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Отправка сообщения в чат с сохранением многошаговой истории диалога (Multi-turn chat).
+     * Поддерживает как локальный инференс (LlamaBridge / GGUF), так и внешнее API OpenCode (GO / ZEN).
      */
     fun sendMessage(userText: String = _uiState.value.inputText) {
         val prompt = userText.trim()
-        if (prompt.isEmpty() || !_uiState.value.isModelLoaded || _uiState.value.isGenerating) return
+        if (prompt.isEmpty() || _uiState.value.isGenerating) return
+
+        val isLocal = _uiState.value.providerType == LLMProviderType.LOCAL_GGUF
+        if (isLocal && !_uiState.value.isModelLoaded) return
+        if (!isLocal && _uiState.value.openCodeApiKey.isBlank()) {
+            _uiState.update {
+                it.copy(
+                    statusMessage = "Укажите API-ключ для ${_uiState.value.providerType.displayName}",
+                    isProviderDialogVisible = true
+                )
+            }
+            return
+        }
 
         val userMessage = ChatMessage(
             role = MessageRole.USER,
@@ -627,6 +750,105 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         rolesList.add("user")
         contentsList.add(prompt)
 
+        // Ветка 1: Внешний облачный API (OpenCode GO / OpenCode ZEN)
+        if (!isLocal) {
+            isRemoteCancelled = false
+            viewModelScope.launch(Dispatchers.IO) {
+                val startTime = System.currentTimeMillis()
+                var tokenCount = 0
+                val responseBuilder = StringBuilder()
+
+                val apiMessages = mutableListOf<ApiChatMessage>()
+                for (i in 0 until rolesList.size) {
+                    apiMessages.add(ApiChatMessage(rolesList[i], contentsList[i]))
+                }
+
+                try {
+                    OpenCodeClient.streamChatCompletions(
+                        provider = _uiState.value.providerType,
+                        apiKey = _uiState.value.openCodeApiKey,
+                        model = _uiState.value.openCodeSelectedModel,
+                        messages = apiMessages,
+                        temperature = _uiState.value.temperature,
+                        onToken = { tokenPiece ->
+                            tokenCount++
+                            responseBuilder.append(tokenPiece)
+                            val currentText = responseBuilder.toString()
+                            val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
+                            val speed = if (elapsedSec > 0.05f) tokenCount / elapsedSec else 0.0f
+
+                            _uiState.update { current ->
+                                val msgs = current.messages.map { m ->
+                                    if (m.id == assistantMsgId) {
+                                        m.copy(text = currentText, tokensPerSec = speed, isStreaming = true)
+                                    } else {
+                                        m
+                                    }
+                                }
+                                current.copy(
+                                    messages = msgs,
+                                    totalTokensGenerated = tokenCount,
+                                    tokensPerSecond = speed,
+                                    generationTimeSeconds = elapsedSec
+                                )
+                            }
+                        },
+                        isCancelled = { isRemoteCancelled }
+                    )
+
+                    val totalElapsed = (System.currentTimeMillis() - startTime) / 1000f
+                    val finalSpeed = if (totalElapsed > 0.05f) tokenCount / totalElapsed else 0.0f
+                    val finalText = responseBuilder.toString()
+
+                    val completedMsg = ChatMessage(
+                        id = assistantMsgId,
+                        role = MessageRole.ASSISTANT,
+                        text = finalText,
+                        tokensPerSec = finalSpeed,
+                        isStreaming = false
+                    )
+                    dbHelper.saveMessage(currentChatId, completedMsg)
+                    val refreshedSessions = dbHelper.getAllSessions()
+
+                    _uiState.update { current ->
+                        val msgs = current.messages.map { m ->
+                            if (m.id == assistantMsgId) completedMsg else m
+                        }
+                        current.copy(
+                            messages = msgs,
+                            chatSessions = refreshedSessions,
+                            isGenerating = false,
+                            statusMessage = "Готово. Токенов: $tokenCount (~${String.format("%.1f", finalSpeed)} tok/s)",
+                            tokensPerSecond = finalSpeed,
+                            generationTimeSeconds = totalElapsed
+                        )
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Ошибка генерации через OpenCode: ${e.message}")
+                    val errText = "⚠️ Ошибка API (${_uiState.value.providerType.displayName}): ${e.message ?: "Сбой соединения"}"
+                    val errorMsg = ChatMessage(
+                        id = assistantMsgId,
+                        role = MessageRole.ASSISTANT,
+                        text = errText,
+                        isStreaming = false
+                    )
+                    dbHelper.saveMessage(currentChatId, errorMsg)
+                    _uiState.update { current ->
+                        val msgs = current.messages.map { m ->
+                            if (m.id == assistantMsgId) errorMsg else m
+                        }
+                        current.copy(
+                            messages = msgs,
+                            isGenerating = false,
+                            statusMessage = "Ошибка OpenCode: ${e.message}"
+                        )
+                    }
+                }
+            }
+            return
+        }
+
+        // Ветка 2: Локальная модель GGUF на Helio G99
         val formattedPrompt = LlamaBridge.nativeFormatChat(
             rolesList.toTypedArray(),
             contentsList.toTypedArray()
@@ -744,7 +966,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         if (type in listOf("photos", "storage", "battery", "device")) {
-            if (_uiState.value.inputText.isBlank() && _uiState.value.isModelLoaded && !_uiState.value.isGenerating) {
+            if (_uiState.value.inputText.isBlank() && _uiState.value.isReadyToChat && !_uiState.value.isGenerating) {
                 sendMessage(query)
             } else {
                 _uiState.update { it.copy(inputText = query) }
@@ -757,7 +979,11 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopGeneration() {
-        LlamaBridge.nativeStop()
+        if (_uiState.value.providerType == LLMProviderType.LOCAL_GGUF) {
+            LlamaBridge.nativeStop()
+        } else {
+            isRemoteCancelled = true
+        }
         val currentId = _uiState.value.currentChatId
         _uiState.update { current ->
             val msgs = current.messages.map { m ->

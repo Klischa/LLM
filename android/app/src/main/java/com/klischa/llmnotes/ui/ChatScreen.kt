@@ -11,17 +11,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,6 +41,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.klischa.llmnotes.ChatMessage
@@ -45,6 +50,7 @@ import com.klischa.llmnotes.LLMViewModel
 import com.klischa.llmnotes.MessageRole
 import com.klischa.llmnotes.SystemPromptPreset
 import com.klischa.llmnotes.UiState
+import com.klischa.llmnotes.api.LLMProviderType
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -63,6 +69,15 @@ fun ChatScreen(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
     var chatSearchQuery by remember { mutableStateOf("") }
+
+    // Диалог настройки провайдеров (OpenCode GO, ZEN, локальный GGUF)
+    if (uiState.isProviderDialogVisible) {
+        ProviderSettingsDialog(
+            uiState = uiState,
+            viewModel = viewModel,
+            onDismiss = { viewModel.setProviderDialogVisible(false) }
+        )
+    }
 
     // Автоматическая прокрутка к последнему сообщению при получении новых токенов
     LaunchedEffect(uiState.messages.size, uiState.messages.lastOrNull()?.text) {
@@ -211,10 +226,13 @@ fun ChatScreen(
                                 maxLines = 1,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                             )
-                            val modelDisplayName = if (uiState.isModelLoaded) {
-                                java.io.File(uiState.modelPath).name.ifBlank { uiState.modelPath }
-                            } else {
-                                "Офлайн ассистент • Helio G99"
+                            val modelDisplayName = when (uiState.providerType) {
+                                LLMProviderType.LOCAL_GGUF -> {
+                                    if (uiState.isModelLoaded) java.io.File(uiState.modelPath).name.ifBlank { uiState.modelPath }
+                                    else "Офлайн GGUF • Helio G99"
+                                }
+                                LLMProviderType.OPENCODE_GO -> "OpenCode GO • ${uiState.openCodeSelectedModel}"
+                                LLMProviderType.OPENCODE_ZEN -> "OpenCode ZEN • ${uiState.openCodeSelectedModel}"
                             }
                             Text(
                                 text = modelDisplayName,
@@ -225,114 +243,130 @@ fun ChatScreen(
                             )
                         }
                     },
-                actions = {
-                    // Кнопка настройки системного промпта
-                    IconButton(onClick = { viewModel.toggleSystemPromptExpanded() }) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "Системный промпт",
-                            tint = if (uiState.isSystemPromptExpanded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    // Выбор GGUF модели
-                    IconButton(onClick = onSelectModelClick) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "Выбрать GGUF"
-                        )
-                    }
-
-                    // Очистить историю диалога
-                    if (uiState.messages.isNotEmpty()) {
-                        IconButton(onClick = { viewModel.clearChat() }) {
+                    actions = {
+                        // Выбор провайдера (Локально / OpenCode GO / ZEN)
+                        IconButton(onClick = { viewModel.setProviderDialogVisible(true) }) {
                             Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Очистить чат"
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Провайдер LLM",
+                                tint = if (uiState.providerType != LLMProviderType.LOCAL_GGUF) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                             )
                         }
-                    }
 
-                    // Выгрузить модель
-                    if (uiState.isModelLoaded) {
-                        IconButton(onClick = { viewModel.unloadModel() }) {
+                        // Кнопка настройки системного промпта
+                        IconButton(onClick = { viewModel.toggleSystemPromptExpanded() }) {
                             Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Выгрузить модель",
-                                tint = MaterialTheme.colorScheme.error
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Системный промпт",
+                                tint = if (uiState.isSystemPromptExpanded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                             )
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+
+                        // Выбор GGUF модели (только в локальном режиме)
+                        if (uiState.providerType == LLMProviderType.LOCAL_GGUF) {
+                            IconButton(onClick = onSelectModelClick) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = "Выбрать GGUF"
+                                )
+                            }
+                        }
+
+                        // Очистить историю диалога
+                        if (uiState.messages.isNotEmpty()) {
+                            IconButton(onClick = { viewModel.clearChat() }) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Очистить чат"
+                                )
+                            }
+                        }
+
+                        // Выгрузить локальную модель
+                        if (uiState.providerType == LLMProviderType.LOCAL_GGUF && uiState.isModelLoaded) {
+                            IconButton(onClick = { viewModel.unloadModel() }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Выгрузить модель",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
                 )
-            )
-        }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .imePadding()
-        ) {
-            // 1. Панель параметров системного промпта
-            AnimatedVisibility(visible = uiState.isSystemPromptExpanded) {
-                SystemPromptCard(uiState, viewModel)
             }
-
-            // 2. Информационная плашка статуса модели и производительности
-            DeviceStatusStrip(uiState, viewModel)
-
-            // 3. Область сообщений чата
-            Box(
+        ) { paddingValues ->
+            Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .imePadding()
             ) {
-                if (uiState.messages.isEmpty()) {
-                    EmptyChatPlaceholder(uiState, onSelectModelClick)
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        items(uiState.messages, key = { it.id }) { message ->
-                            ChatMessageBubble(
-                                message = message,
-                                onCopyClick = {
-                                    clipboardManager.setText(AnnotatedString(message.text))
-                                    Toast.makeText(context, "Текст скопирован", Toast.LENGTH_SHORT).show()
-                                }
-                            )
+                // 1. Панель параметров системного промпта
+                AnimatedVisibility(visible = uiState.isSystemPromptExpanded) {
+                    SystemPromptCard(uiState, viewModel)
+                }
+
+                // 2. Информационная плашка статуса модели и производительности
+                DeviceStatusStrip(uiState, viewModel)
+
+                // 3. Область сообщений чата
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    if (uiState.messages.isEmpty()) {
+                        EmptyChatPlaceholder(
+                            uiState = uiState,
+                            onSelectModelClick = onSelectModelClick,
+                            onOpenProviderSettings = { viewModel.setProviderDialogVisible(true) }
+                        )
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items(uiState.messages, key = { it.id }) { message ->
+                                ChatMessageBubble(
+                                    message = message,
+                                    onCopyClick = {
+                                        clipboardManager.setText(AnnotatedString(message.text))
+                                        Toast.makeText(context, "Текст скопирован", Toast.LENGTH_SHORT).show()
+                                    }
+                                )
+                            }
                         }
                     }
                 }
+
+                // 4. Панель быстрых подсказок (телеметрия, саммари, задачи)
+                QuickPromptChips(
+                    isReady = uiState.isReadyToChat,
+                    onChipClick = { type -> viewModel.insertNotePrompt(type) }
+                )
+
+                // 5. Поле ввода сообщения и кнопка отправки/остановки
+                ChatInputBar(
+                    uiState = uiState,
+                    onInputTextChange = { viewModel.updateInputText(it) },
+                    onSendClick = { viewModel.sendMessage() },
+                    onStopClick = { viewModel.stopGeneration() }
+                )
             }
-
-            // 4. Панель быстрых подсказок (саммари, задачи, markdown)
-            QuickPromptChips(
-                isModelLoaded = uiState.isModelLoaded,
-                onChipClick = { type -> viewModel.insertNotePrompt(type) }
-            )
-
-            // 5. Поле ввода сообщения и кнопка отправки/остановки
-            ChatInputBar(
-                uiState = uiState,
-                onInputTextChange = { viewModel.updateInputText(it) },
-                onSendClick = { viewModel.sendMessage() },
-                onStopClick = { viewModel.stopGeneration() }
-            )
         }
     }
-}
 }
 
 @Composable
 fun DeviceStatusStrip(uiState: UiState, viewModel: LLMViewModel) {
+    val isLocal = uiState.providerType == LLMProviderType.LOCAL_GGUF
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -354,7 +388,8 @@ fun DeviceStatusStrip(uiState: UiState, viewModel: LLMViewModel) {
                             .size(9.dp)
                             .background(
                                 when {
-                                    uiState.isModelLoaded -> Color(0xFF4CAF50)
+                                    isLocal && uiState.isModelLoaded -> Color(0xFF4CAF50)
+                                    !isLocal && uiState.openCodeApiKey.isNotBlank() -> Color(0xFF4CAF50)
                                     uiState.isLoadingModel -> Color(0xFF2196F3)
                                     else -> Color(0xFFFF9800)
                                 },
@@ -364,19 +399,29 @@ fun DeviceStatusStrip(uiState: UiState, viewModel: LLMViewModel) {
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = when {
-                            uiState.isModelLoaded -> "Модель активна"
-                            uiState.isLoadingModel -> "Загрузка модели..."
-                            else -> "Модель не выбрана"
+                            isLocal && uiState.isModelLoaded -> "Модель активна"
+                            isLocal && uiState.isLoadingModel -> "Загрузка модели..."
+                            isLocal -> "Модель не выбрана"
+                            !isLocal && uiState.openCodeApiKey.isNotBlank() -> "${uiState.providerType.displayName} активен"
+                            else -> "Требуется API-ключ"
                         },
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
                     )
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "RAM: ~${uiState.allocatedRamMb} МБ",
-                        style = MaterialTheme.typography.labelSmall
-                    )
+                    if (isLocal) {
+                        Text(
+                            text = "RAM: ~${uiState.allocatedRamMb} МБ",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    } else {
+                        Text(
+                            text = "Облачный API",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
                         text = "${String.format("%.1f", uiState.tokensPerSecond)} tok/s",
@@ -392,11 +437,13 @@ fun DeviceStatusStrip(uiState: UiState, viewModel: LLMViewModel) {
             }
 
             // Текст статуса или ошибки
-            val isError = !uiState.isModelLoaded && !uiState.isLoadingModel &&
+            val isError = (isLocal && !uiState.isModelLoaded && !uiState.isLoadingModel &&
                           (uiState.statusMessage.contains("Ошибка") ||
                            uiState.statusMessage.contains("не найден") ||
                            uiState.statusMessage.contains("не поддерживается") ||
-                           uiState.statusMessage.contains("Недостаточно"))
+                           uiState.statusMessage.contains("Недостаточно"))) ||
+                          (!isLocal && uiState.statusMessage.contains("Ошибка"))
+
             if (uiState.statusMessage.isNotBlank()) {
                 Text(
                     text = uiState.statusMessage,
@@ -459,26 +506,28 @@ fun SystemPromptCard(uiState: UiState, viewModel: LLMViewModel) {
                 shape = RoundedCornerShape(10.dp)
             )
 
-            // Переключатель потоков
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Потоки (Helio G99 оптимум: 2):",
-                    style = MaterialTheme.typography.labelSmall
-                )
-                Row {
-                    listOf(2, 3, 4).forEach { count ->
-                        FilterChip(
-                            selected = uiState.threadCount == count,
-                            onClick = { viewModel.setThreadCount(count) },
-                            label = { Text("$count", fontSize = 11.sp) },
-                            modifier = Modifier.padding(horizontal = 2.dp)
-                        )
+            // Переключатель потоков (для локальной модели)
+            if (uiState.providerType == LLMProviderType.LOCAL_GGUF) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Потоки (Helio G99 оптимум: 2):",
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                    Row {
+                        listOf(2, 3, 4).forEach { count ->
+                            FilterChip(
+                                selected = uiState.threadCount == count,
+                                onClick = { viewModel.setThreadCount(count) },
+                                label = { Text("$count", fontSize = 11.sp) },
+                                modifier = Modifier.padding(horizontal = 2.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -489,8 +538,10 @@ fun SystemPromptCard(uiState: UiState, viewModel: LLMViewModel) {
 @Composable
 fun EmptyChatPlaceholder(
     uiState: UiState,
-    onSelectModelClick: () -> Unit
+    onSelectModelClick: () -> Unit,
+    onOpenProviderSettings: () -> Unit
 ) {
+    val isLocal = uiState.providerType == LLMProviderType.LOCAL_GGUF
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -509,22 +560,24 @@ fun EmptyChatPlaceholder(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "Офлайн-чат с LLM",
+                    text = if (isLocal) "Офлайн-чат с LLM" else "Чат с ${uiState.providerType.displayName}",
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = if (uiState.isModelLoaded)
-                        "Модель готова к диалогу. Введите сообщение ниже или воспользуйтесь быстрыми кнопками."
-                    else
-                        "Загрузите GGUF-модель (Qwen 2.5 1.5B/3B, Llama 3.2), чтобы начать общение.",
+                    text = when {
+                        isLocal && uiState.isModelLoaded -> "Модель готова к диалогу. Введите сообщение ниже или воспользуйтесь быстрыми кнопками."
+                        isLocal -> "Загрузите GGUF-модель (Qwen 2.5, Llama 3.2), чтобы начать общение, либо подключите API OpenCode."
+                        !isLocal && uiState.openCodeApiKey.isNotBlank() -> "Модель ${uiState.openCodeSelectedModel} готова к работе через ${uiState.providerType.displayName}."
+                        else -> "Введите API-ключ OpenCode для доступа к ${uiState.providerType.displayName}."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
 
-                if (!uiState.isModelLoaded) {
-                    Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(14.dp))
+                if (isLocal && !uiState.isModelLoaded) {
                     Button(
                         onClick = onSelectModelClick,
                         shape = RoundedCornerShape(10.dp)
@@ -533,10 +586,179 @@ fun EmptyChatPlaceholder(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("Выбрать файл .gguf")
                     }
+                } else if (!isLocal && uiState.openCodeApiKey.isBlank()) {
+                    Button(
+                        onClick = onOpenProviderSettings,
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Ввести API-ключ")
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+fun ProviderSettingsDialog(
+    uiState: UiState,
+    viewModel: LLMViewModel,
+    onDismiss: () -> Unit
+) {
+    var apiKeyText by remember(uiState.openCodeApiKey) { mutableStateOf(uiState.openCodeApiKey) }
+    var showApiKey by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Провайдер LLM и модели",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Выберите источник инференса:",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                )
+
+                // Чипы выбора провайдера
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    FilterChip(
+                        selected = uiState.providerType == LLMProviderType.LOCAL_GGUF,
+                        onClick = { viewModel.setProviderType(LLMProviderType.LOCAL_GGUF) },
+                        label = { Text("📱 Офлайн", fontSize = 11.sp) }
+                    )
+                    FilterChip(
+                        selected = uiState.providerType == LLMProviderType.OPENCODE_GO,
+                        onClick = { viewModel.setProviderType(LLMProviderType.OPENCODE_GO) },
+                        label = { Text("⚡ OpenCode GO", fontSize = 11.sp) }
+                    )
+                    FilterChip(
+                        selected = uiState.providerType == LLMProviderType.OPENCODE_ZEN,
+                        onClick = { viewModel.setProviderType(LLMProviderType.OPENCODE_ZEN) },
+                        label = { Text("🧘 ZEN", fontSize = 11.sp) }
+                    )
+                }
+
+                if (uiState.providerType != LLMProviderType.LOCAL_GGUF) {
+                    // Описание подписки
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = if (uiState.providerType == LLMProviderType.OPENCODE_GO)
+                                "⚡ OpenCode GO: открытые и кодинг-модели (DeepSeek V4 Pro, Kimi K2.6, Qwen 3.6, GLM 5.1, MiniMax M3)."
+                            else
+                                "🧘 OpenCode ZEN: доступ к флагманам frontier (Claude 3.7 Sonnet, GPT-4o, DeepSeek R1, Gemini 2.0).",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+
+                    // Поле ввода API ключа
+                    OutlinedTextField(
+                        value = apiKeyText,
+                        onValueChange = {
+                            apiKeyText = it
+                            viewModel.setOpenCodeApiKey(it)
+                        },
+                        label = { Text("API-ключ OpenCode (sk-...)") },
+                        placeholder = { Text("sk-...") },
+                        singleLine = true,
+                        visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            TextButton(onClick = { showApiKey = !showApiKey }) {
+                                Text(if (showApiKey) "Скрыть" else "Показать", fontSize = 10.sp)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+
+                    // Выбор модели из каталога
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Модель из подписки:",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                        TextButton(
+                            onClick = { viewModel.fetchRemoteModels() },
+                            enabled = !uiState.isFetchingModels && uiState.openCodeApiKey.isNotBlank()
+                        ) {
+                            Text(if (uiState.isFetchingModels) "Загрузка..." else "🔄 Обновить", fontSize = 11.sp)
+                        }
+                    }
+
+                    // Список моделей
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 190.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        uiState.openCodeAvailableModels.forEach { modelName ->
+                            val isSelected = modelName == uiState.openCodeSelectedModel
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { viewModel.setOpenCodeSelectedModel(modelName) }
+                                    .background(
+                                        if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                                        else Color.Transparent,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = { viewModel.setOpenCodeSelectedModel(modelName) }
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = modelName,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        text = "В офлайн-режиме модель выполняется локально на процессоре Helio G99 смартфона без подключения к интернету.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) {
+                Text("Готово")
+            }
+        }
+    )
 }
 
 @Composable
@@ -635,7 +857,7 @@ fun ChatMessageBubble(
 
 @Composable
 fun QuickPromptChips(
-    isModelLoaded: Boolean,
+    isReady: Boolean,
     onChipClick: (String) -> Unit
 ) {
     LazyRow(
@@ -648,56 +870,56 @@ fun QuickPromptChips(
             SuggestionChip(
                 onClick = { onChipClick("photos") },
                 label = { Text("📸 Сколько фото?", fontSize = 11.sp) },
-                enabled = isModelLoaded
+                enabled = isReady
             )
         }
         item {
             SuggestionChip(
                 onClick = { onChipClick("storage") },
                 label = { Text("💾 Память", fontSize = 11.sp) },
-                enabled = isModelLoaded
+                enabled = isReady
             )
         }
         item {
             SuggestionChip(
                 onClick = { onChipClick("battery") },
                 label = { Text("🔋 Батарея", fontSize = 11.sp) },
-                enabled = isModelLoaded
+                enabled = isReady
             )
         }
         item {
             SuggestionChip(
                 onClick = { onChipClick("device") },
                 label = { Text("📱 Телефон", fontSize = 11.sp) },
-                enabled = isModelLoaded
+                enabled = isReady
             )
         }
         item {
             SuggestionChip(
                 onClick = { onChipClick("summary") },
                 label = { Text("📝 Саммари", fontSize = 11.sp) },
-                enabled = isModelLoaded
+                enabled = isReady
             )
         }
         item {
             SuggestionChip(
                 onClick = { onChipClick("tasks") },
                 label = { Text("✅ Задачи", fontSize = 11.sp) },
-                enabled = isModelLoaded
+                enabled = isReady
             )
         }
         item {
             SuggestionChip(
                 onClick = { onChipClick("format") },
                 label = { Text("✨ Markdown", fontSize = 11.sp) },
-                enabled = isModelLoaded
+                enabled = isReady
             )
         }
         item {
             SuggestionChip(
                 onClick = { onChipClick("explain") },
                 label = { Text("💡 Объясни", fontSize = 11.sp) },
-                enabled = isModelLoaded
+                enabled = isReady
             )
         }
     }
@@ -710,6 +932,8 @@ fun ChatInputBar(
     onSendClick: () -> Unit,
     onStopClick: () -> Unit
 ) {
+    val isReady = uiState.isReadyToChat
+
     Surface(
         tonalElevation = 2.dp,
         modifier = Modifier.fillMaxWidth()
@@ -726,15 +950,16 @@ fun ChatInputBar(
                 onValueChange = onInputTextChange,
                 placeholder = {
                     Text(
-                        if (uiState.isModelLoaded) "Сообщение ассистенту..."
-                        else "Сначала выберите модель GGUF..."
+                        if (isReady) "Сообщение ассистенту..."
+                        else if (uiState.providerType == LLMProviderType.LOCAL_GGUF) "Сначала выберите модель GGUF..."
+                        else "Укажите API-ключ ${uiState.providerType.displayName}..."
                     )
                 },
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 52.dp, max = 130.dp),
                 shape = RoundedCornerShape(22.dp),
-                enabled = uiState.isModelLoaded && !uiState.isGenerating
+                enabled = isReady && !uiState.isGenerating
             )
 
             if (uiState.isGenerating) {
@@ -753,11 +978,11 @@ fun ChatInputBar(
             } else {
                 IconButton(
                     onClick = onSendClick,
-                    enabled = uiState.isModelLoaded && uiState.inputText.isNotBlank(),
+                    enabled = isReady && uiState.inputText.isNotBlank(),
                     modifier = Modifier
                         .size(48.dp)
                         .background(
-                            if (uiState.isModelLoaded && uiState.inputText.isNotBlank()) {
+                            if (isReady && uiState.inputText.isNotBlank()) {
                                 MaterialTheme.colorScheme.primary
                             } else {
                                 MaterialTheme.colorScheme.surfaceVariant
@@ -768,7 +993,7 @@ fun ChatInputBar(
                     Icon(
                         imageVector = Icons.Default.Send,
                         contentDescription = "Отправить",
-                        tint = if (uiState.isModelLoaded && uiState.inputText.isNotBlank()) {
+                        tint = if (isReady && uiState.inputText.isNotBlank()) {
                             MaterialTheme.colorScheme.onPrimary
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
