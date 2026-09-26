@@ -149,7 +149,7 @@ fun ChatScreen(
                     .fillMaxWidth()
             ) {
                 if (uiState.messages.isEmpty()) {
-                    EmptyChatPlaceholder(uiState, viewModel, onSelectModelClick)
+                    EmptyChatPlaceholder(uiState, onSelectModelClick)
                 } else {
                     LazyColumn(
                         state = listState,
@@ -346,7 +346,6 @@ fun SystemPromptCard(uiState: UiState, viewModel: LLMViewModel) {
 @Composable
 fun EmptyChatPlaceholder(
     uiState: UiState,
-    viewModel: LLMViewModel,
     onSelectModelClick: () -> Unit
 ) {
     Box(
@@ -355,78 +354,41 @@ fun EmptyChatPlaceholder(
             .padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            ),
+            modifier = Modifier.fillMaxWidth(0.92f)
         ) {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                ),
-                modifier = Modifier.fillMaxWidth()
+            Column(
+                modifier = Modifier.padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Офлайн-чат с LLM",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = if (uiState.isModelLoaded)
-                            "Модель готова к диалогу. Введите сообщение ниже или выберите готовую тему."
-                        else
-                            "Загрузите GGUF-модель (Qwen 2.5 1.5B/3B, Llama 3.2), чтобы начать общение.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    if (!uiState.isModelLoaded) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Button(
-                            onClick = onSelectModelClick,
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Выбрать файл .gguf")
-                        }
-                    }
-                }
-            }
-
-            // Быстрые карточки для старта
-            if (uiState.isModelLoaded) {
                 Text(
-                    text = "Идеи для запросов:",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "Офлайн-чат с LLM",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = if (uiState.isModelLoaded)
+                        "Модель готова к диалогу. Введите сообщение ниже или воспользуйтесь быстрыми кнопками."
+                    else
+                        "Загрузите GGUF-модель (Qwen 2.5 1.5B/3B, Llama 3.2), чтобы начать общение.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
 
-                val suggestions = listOf(
-                    "📸 Сколько фото сохранено на моем телефоне?",
-                    "💾 Сколько свободно памяти на устройстве?",
-                    "🔋 Какой текущий уровень заряда аккумулятора?",
-                    "📝 Сделай краткое резюме заметки...",
-                    "✅ Составь список задач (Action Items)...",
-                    "💡 Объясни простыми словами квантовую физику"
-                )
-
-                suggestions.forEach { suggestion ->
-                    OutlinedButton(
-                        onClick = { viewModel.updateInputText(suggestion) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                if (!uiState.isModelLoaded) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Button(
+                        onClick = onSelectModelClick,
+                        shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text(
-                            text = suggestion,
-                            fontSize = 12.sp,
-                            maxLines = 1
-                        )
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Выбрать файл .gguf")
                     }
                 }
             }
