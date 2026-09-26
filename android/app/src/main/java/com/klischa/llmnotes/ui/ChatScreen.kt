@@ -389,7 +389,7 @@ fun DeviceStatusStrip(uiState: UiState, viewModel: LLMViewModel) {
                             .background(
                                 when {
                                     isLocal && uiState.isModelLoaded -> Color(0xFF4CAF50)
-                                    !isLocal && uiState.openCodeApiKey.isNotBlank() -> Color(0xFF4CAF50)
+                                    !isLocal && uiState.currentApiKey.isNotBlank() -> Color(0xFF4CAF50)
                                     uiState.isLoadingModel -> Color(0xFF2196F3)
                                     else -> Color(0xFFFF9800)
                                 },
@@ -402,7 +402,7 @@ fun DeviceStatusStrip(uiState: UiState, viewModel: LLMViewModel) {
                             isLocal && uiState.isModelLoaded -> "Модель активна"
                             isLocal && uiState.isLoadingModel -> "Загрузка модели..."
                             isLocal -> "Модель не выбрана"
-                            !isLocal && uiState.openCodeApiKey.isNotBlank() -> "${uiState.providerType.displayName} активен"
+                            !isLocal && uiState.currentApiKey.isNotBlank() -> "${uiState.providerType.displayName} активен"
                             else -> "Требуется API-ключ"
                         },
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
@@ -568,7 +568,7 @@ fun EmptyChatPlaceholder(
                     text = when {
                         isLocal && uiState.isModelLoaded -> "Модель готова к диалогу. Введите сообщение ниже или воспользуйтесь быстрыми кнопками."
                         isLocal -> "Загрузите GGUF-модель (Qwen 2.5, Llama 3.2), чтобы начать общение, либо подключите API OpenCode."
-                        !isLocal && uiState.openCodeApiKey.isNotBlank() -> "Модель ${uiState.openCodeSelectedModel} готова к работе через ${uiState.providerType.displayName}."
+                        !isLocal && uiState.currentApiKey.isNotBlank() -> "Модель ${uiState.openCodeSelectedModel} готова к работе через ${uiState.providerType.displayName}."
                         else -> "Введите API-ключ OpenCode для доступа к ${uiState.providerType.displayName}."
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -586,7 +586,7 @@ fun EmptyChatPlaceholder(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("Выбрать файл .gguf")
                     }
-                } else if (!isLocal && uiState.openCodeApiKey.isBlank()) {
+                } else if (!isLocal && uiState.currentApiKey.isBlank()) {
                     Button(
                         onClick = onOpenProviderSettings,
                         shape = RoundedCornerShape(10.dp)
@@ -607,7 +607,8 @@ fun ProviderSettingsDialog(
     viewModel: LLMViewModel,
     onDismiss: () -> Unit
 ) {
-    var apiKeyText by remember(uiState.openCodeApiKey) { mutableStateOf(uiState.openCodeApiKey) }
+    val currentKey = uiState.currentApiKey
+    var apiKeyText by remember(uiState.providerType, currentKey) { mutableStateOf(currentKey) }
     var showApiKey by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -675,10 +676,17 @@ fun ProviderSettingsDialog(
                         value = apiKeyText,
                         onValueChange = {
                             apiKeyText = it
-                            viewModel.setOpenCodeApiKey(it)
+                            viewModel.setOpenCodeApiKey(it, uiState.providerType)
                         },
-                        label = { Text("API-ключ OpenCode (sk-...)") },
-                        placeholder = { Text("sk-...") },
+                        label = {
+                            Text(
+                                if (uiState.providerType == LLMProviderType.OPENCODE_ZEN)
+                                    "API-ключ OpenCode ZEN"
+                                else
+                                    "API-ключ OpenCode GO"
+                            )
+                        },
+                        placeholder = { Text(if (uiState.providerType == LLMProviderType.OPENCODE_ZEN) "sk-zen-... или sk-..." else "sk-...") },
                         singleLine = true,
                         visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
                         trailingIcon = {
@@ -702,7 +710,7 @@ fun ProviderSettingsDialog(
                         )
                         TextButton(
                             onClick = { viewModel.fetchRemoteModels() },
-                            enabled = !uiState.isFetchingModels && uiState.openCodeApiKey.isNotBlank()
+                            enabled = !uiState.isFetchingModels && uiState.currentApiKey.isNotBlank()
                         ) {
                             Text(if (uiState.isFetchingModels) "Загрузка..." else "🔄 Обновить", fontSize = 11.sp)
                         }

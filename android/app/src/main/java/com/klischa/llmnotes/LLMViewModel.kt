@@ -70,7 +70,8 @@ data class UiState(
     val currentChatId: String = "",
     val chatSessions: List<com.klischa.llmnotes.data.ChatSession> = emptyList(),
     val providerType: LLMProviderType = LLMProviderType.LOCAL_GGUF,
-    val openCodeApiKey: String = "",
+    val openCodeGoApiKey: String = "",
+    val openCodeZenApiKey: String = "",
     val openCodeSelectedModel: String = "deepseek-v4-pro",
     val openCodeAvailableModels: List<String> = OpenCodeClient.GO_DEFAULT_MODELS,
     val isProviderDialogVisible: Boolean = false,
@@ -86,8 +87,15 @@ data class UiState(
     val temperature: Float = 0.3f,
     val topP: Float = 0.85f
 ) {
+    val currentApiKey: String
+        get() = when (providerType) {
+            LLMProviderType.OPENCODE_GO -> openCodeGoApiKey
+            LLMProviderType.OPENCODE_ZEN -> openCodeZenApiKey
+            LLMProviderType.LOCAL_GGUF -> ""
+        }
+
     val isReadyToChat: Boolean
-        get() = if (providerType == LLMProviderType.LOCAL_GGUF) isModelLoaded else openCodeApiKey.isNotBlank()
+        get() = if (providerType == LLMProviderType.LOCAL_GGUF) isModelLoaded else currentApiKey.isNotBlank()
 }
 
 class LLMViewModel(application: Application) : AndroidViewModel(application) {
@@ -109,6 +117,8 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         private const val PREF_AUTO_LOAD_ENABLED = "auto_load_enabled"
         private const val PREF_PROVIDER_TYPE = "provider_type"
         private const val PREF_OPENCODE_API_KEY = "opencode_api_key"
+        private const val PREF_OPENCODE_GO_KEY = "opencode_go_key"
+        private const val PREF_OPENCODE_ZEN_KEY = "opencode_zen_key"
         private const val PREF_OPENCODE_MODEL_GO = "opencode_model_go"
         private const val PREF_OPENCODE_MODEL_ZEN = "opencode_model_zen"
     }
@@ -199,7 +209,10 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val providerStr = prefs.getString(PREF_PROVIDER_TYPE, LLMProviderType.LOCAL_GGUF.name)
         val provider = try { LLMProviderType.valueOf(providerStr ?: "") } catch (_: Exception) { LLMProviderType.LOCAL_GGUF }
-        val apiKey = prefs.getString(PREF_OPENCODE_API_KEY, "") ?: ""
+        val keyGo = prefs.getString(PREF_OPENCODE_GO_KEY, null)
+            ?: prefs.getString(PREF_OPENCODE_API_KEY, "") ?: ""
+        val keyZen = prefs.getString(PREF_OPENCODE_ZEN_KEY, null)
+            ?: prefs.getString(PREF_OPENCODE_API_KEY, "") ?: ""
         val modelGo = prefs.getString(PREF_OPENCODE_MODEL_GO, "deepseek-v4-pro") ?: "deepseek-v4-pro"
         val modelZen = prefs.getString(PREF_OPENCODE_MODEL_ZEN, "claude-3-7-sonnet") ?: "claude-3-7-sonnet"
         val selectedModel = if (provider == LLMProviderType.OPENCODE_ZEN) modelZen else modelGo
@@ -208,7 +221,8 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 providerType = provider,
-                openCodeApiKey = apiKey,
+                openCodeGoApiKey = keyGo,
+                openCodeZenApiKey = keyZen,
                 openCodeSelectedModel = selectedModel,
                 openCodeAvailableModels = models
             )
@@ -238,16 +252,21 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
 
-        if (type != LLMProviderType.LOCAL_GGUF && _uiState.value.openCodeApiKey.isNotBlank()) {
+        if (type != LLMProviderType.LOCAL_GGUF && _uiState.value.currentApiKey.isNotBlank()) {
             fetchRemoteModels()
         }
     }
 
-    fun setOpenCodeApiKey(key: String) {
+    fun setOpenCodeApiKey(key: String, provider: LLMProviderType = _uiState.value.providerType) {
         val cleanKey = key.trim()
         val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(PREF_OPENCODE_API_KEY, cleanKey).apply()
-        _uiState.update { it.copy(openCodeApiKey = cleanKey) }
+        if (provider == LLMProviderType.OPENCODE_ZEN) {
+            prefs.edit().putString(PREF_OPENCODE_ZEN_KEY, cleanKey).apply()
+            _uiState.update { it.copy(openCodeZenApiKey = cleanKey) }
+        } else {
+            prefs.edit().putString(PREF_OPENCODE_GO_KEY, cleanKey).apply()
+            _uiState.update { it.copy(openCodeGoApiKey = cleanKey) }
+        }
         if (cleanKey.isNotBlank()) {
             fetchRemoteModels()
         }
@@ -267,7 +286,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
     fun fetchRemoteModels() {
         val provider = _uiState.value.providerType
-        val apiKey = _uiState.value.openCodeApiKey
+        val apiKey = _uiState.value.currentApiKey
         if (provider == LLMProviderType.LOCAL_GGUF || apiKey.isBlank()) return
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -651,7 +670,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
         val isLocal = _uiState.value.providerType == LLMProviderType.LOCAL_GGUF
         if (isLocal && !_uiState.value.isModelLoaded) return
-        if (!isLocal && _uiState.value.openCodeApiKey.isBlank()) {
+        if (!isLocal && _uiState.value.currentApiKey.isBlank()) {
             _uiState.update {
                 it.copy(
                     statusMessage = "Укажите API-ключ для ${_uiState.value.providerType.displayName}",
@@ -766,9 +785,10 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                 try {
                     OpenCodeClient.streamChatCompletions(
                         provider = _uiState.value.providerType,
-                        apiKey = _uiState.value.openCodeApiKey,
+                        apiKey = _uiState.value.currentApiKey,
                         model = _uiState.value.openCodeSelectedModel,
                         messages = apiMessages,
+                        conversationId = currentChatId,
                         temperature = _uiState.value.temperature,
                         onToken = { tokenPiece ->
                             tokenCount++

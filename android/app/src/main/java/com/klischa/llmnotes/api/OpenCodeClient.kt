@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.URL
+import java.util.UUID
 import javax.net.ssl.HttpsURLConnection
 
 /**
@@ -27,13 +28,14 @@ data class ApiChatMessage(
 
 /**
  * Клиент взаимодействия с внешним OpenAI-совместимым API платформы OpenCode.
- * Поддерживает подписки OpenCode GO и OpenCode ZEN, потоковый вывод ответов (SSE)
- * и получение списка доступных моделей.
+ * Отправляет обязательные клиентские заголовки OpenCode (User-Agent, x-opencode-client,
+ * x-opencode-session, x-session-id), необходимые для авторизации сессий и бесплатного тарифа.
  */
 object OpenCodeClient {
     private const val TAG = "OpenCodeClient"
+    private const val OPENCODE_USER_AGENT = "opencode/1.18.31 (cli; linux; x64)"
 
-    // Рекомендуемые модели для подписки OpenCode GO (включает открытые и кодинг-модели)
+    // Рекомендуемые модели для подписки OpenCode GO
     val GO_DEFAULT_MODELS = listOf(
         "deepseek-v4-pro",
         "kimi-k2.6",
@@ -46,11 +48,13 @@ object OpenCodeClient {
         "deepseek-v3"
     )
 
-    // Рекомендуемые модели для подписки OpenCode ZEN (включает флагманские модели frontier)
+    // Рекомендуемые модели для подписки OpenCode ZEN
     val ZEN_DEFAULT_MODELS = listOf(
+        "big-pickle",
+        "claude-fable-5-1",
+        "claude-haiku-4-5",
         "claude-3-7-sonnet",
         "claude-3-5-sonnet",
-        "claude-3-5-haiku",
         "gpt-4o",
         "gpt-4o-mini",
         "deepseek-r1",
@@ -82,8 +86,18 @@ object OpenCodeClient {
             val url = URL(endpoint)
             conn = url.openConnection() as HttpsURLConnection
             conn.requestMethod = "GET"
-            conn.setRequestProperty("Authorization", "Bearer $apiKey")
+
+            val rawKey = apiKey.removePrefix("Bearer ").removePrefix("bearer ").trim()
+            val sessionId = "ses_" + UUID.randomUUID().toString().replace("-", "").take(24)
+            val requestId = "req_" + UUID.randomUUID().toString().replace("-", "").take(16)
+
+            conn.setRequestProperty("Authorization", "Bearer $rawKey")
+            conn.setRequestProperty("x-api-key", rawKey)
             conn.setRequestProperty("Accept", "application/json")
+            conn.setRequestProperty("User-Agent", OPENCODE_USER_AGENT)
+            conn.setRequestProperty("x-opencode-client", "cli")
+            conn.setRequestProperty("x-opencode-session", sessionId)
+            conn.setRequestProperty("x-opencode-request", requestId)
             conn.connectTimeout = 10000
             conn.readTimeout = 15000
 
@@ -119,12 +133,14 @@ object OpenCodeClient {
 
     /**
      * Потоковая генерация ответа через Server-Sent Events (SSE).
+     * Эмулирует официальный OpenCode CLI для снятия ограничений Free Tier.
      */
     fun streamChatCompletions(
         provider: LLMProviderType,
         apiKey: String,
         model: String,
         messages: List<ApiChatMessage>,
+        conversationId: String = "",
         temperature: Float = 0.7f,
         onToken: (String) -> Unit,
         isCancelled: () -> Boolean
@@ -135,9 +151,30 @@ object OpenCodeClient {
             val url = URL(endpoint)
             conn = url.openConnection() as HttpsURLConnection
             conn.requestMethod = "POST"
-            conn.setRequestProperty("Authorization", "Bearer $apiKey")
+
+            val sessionId = if (conversationId.isNotBlank()) {
+                "ses_" + conversationId.replace("-", "").take(24).padEnd(24, '0')
+            } else {
+                "ses_" + UUID.randomUUID().toString().replace("-", "").take(24)
+            }
+            val requestId = "req_" + UUID.randomUUID().toString().replace("-", "").take(16)
+            val projectId = "prj_" + UUID.randomUUID().toString().replace("-", "").take(16)
+            val rawKey = apiKey.removePrefix("Bearer ").removePrefix("bearer ").trim()
+
+            conn.setRequestProperty("Authorization", "Bearer $rawKey")
+            conn.setRequestProperty("x-api-key", rawKey)
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             conn.setRequestProperty("Accept", "text/event-stream")
+
+            // Обязательные заголовки OpenCode для аутентификации и поддержки Free Tier
+            conn.setRequestProperty("User-Agent", OPENCODE_USER_AGENT)
+            conn.setRequestProperty("x-opencode-client", "cli")
+            conn.setRequestProperty("x-opencode-session", sessionId)
+            conn.setRequestProperty("x-opencode-project", projectId)
+            conn.setRequestProperty("x-opencode-request", requestId)
+            conn.setRequestProperty("x-session-id", sessionId)
+            conn.setRequestProperty("x-session-affinity", sessionId)
+
             conn.doOutput = true
             conn.connectTimeout = 15000
             conn.readTimeout = 60000
@@ -169,7 +206,13 @@ object OpenCodeClient {
                 } catch (_: Exception) {
                     err
                 }
-                throw Exception("Ошибка ${provider.displayName} ($responseCode): $cleanErr")
+
+                val tip = when (responseCode) {
+                    401 -> "Неверный API-ключ. Проверьте, что ключ подходит для выбранной подписки (${provider.displayName})."
+                    403 -> "Доступ отклонен ($cleanErr). Проверьте активность подписки ${provider.displayName}."
+                    else -> cleanErr
+                }
+                throw Exception("Ошибка ${provider.displayName} ($responseCode): $tip")
             }
 
             val reader = BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8))
