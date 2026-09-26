@@ -194,11 +194,12 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                                                 error.contains("cannot allocate")
 
                         if (isFatalModelError) {
+                            val friendlyError = formatLoadError(error)
                             _uiState.update {
                                 it.copy(
                                     isModelLoaded = false,
                                     isLoadingModel = false,
-                                    statusMessage = error
+                                    statusMessage = friendlyError
                                 )
                             }
                             updateRamUsage()
@@ -302,15 +303,28 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         } else {
+            val friendlyError = formatLoadError(error)
             _uiState.update {
                 it.copy(
                     isModelLoaded = false,
                     isLoadingModel = false,
-                    statusMessage = error
+                    statusMessage = friendlyError
                 )
             }
         }
         updateRamUsage()
+    }
+
+    private fun formatLoadError(error: String): String {
+        return when {
+            error.contains("unknown model architecture: 'qwen35'") || error.contains("'qwen35'") ->
+                "Архитектура 'qwen35' (Qwen 3.5) содержит гибридные слои DeltaNet и не поддерживается мобильным llama.cpp. Используйте официальные модели линейки Qwen 2.5 (архитектура 'qwen2') или Llama-3.2."
+            error.contains("unknown model architecture") ->
+                "Неподдерживаемая архитектура ($error). Поддерживаются архитектуры: Qwen 2.5 (qwen2), LLaMA 3/3.2 (llama), Gemma 2 (gemma2), Mistral, Phi-3."
+            error.contains("недостаточно памяти") || error.contains("out of memory") ->
+                "Недостаточно RAM для модели. Выберите модель 1.5B или закройте тяжелые приложения."
+            else -> error
+        }
     }
 
     fun loadModel(filePath: String) {
