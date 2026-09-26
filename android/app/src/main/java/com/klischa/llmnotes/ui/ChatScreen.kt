@@ -720,12 +720,13 @@ fun ProviderSettingsDialog(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 190.dp)
+                            .heightIn(max = 210.dp)
                             .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
                         uiState.openCodeAvailableModels.forEach { modelName ->
                             val isSelected = modelName == uiState.openCodeSelectedModel
+                            val isFree = OpenCodeClient.isFreeModel(uiState.providerType, modelName)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -747,10 +748,33 @@ fun ProviderSettingsDialog(
                                     text = modelName,
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                    )
+                                    ),
+                                    modifier = Modifier.weight(1f)
                                 )
+                                if (isFree) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
+                                        Text(
+                                            text = "Free",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
+                    }
+
+                    if (uiState.providerType == LLMProviderType.OPENCODE_ZEN) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "💡 Модели с плашкой Free (big-pickle, deepseek-v4-flash-free и др.) доступны бесплатно. Платные модели требуют пополнения баланса.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 } else {
                     Text(

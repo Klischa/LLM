@@ -95,21 +95,28 @@ object OpenCodeClient {
         "deepseek-v3"
     )
 
-    // Рекомендуемые модели для подписки OpenCode ZEN
+    // Рекомендуемые модели для подписки OpenCode ZEN (бесплатные Free Tier вынесены в начало)
     val ZEN_DEFAULT_MODELS = listOf(
         "big-pickle",
-        "claude-fable-5-1",
-        "claude-haiku-4-5",
-        "claude-3-7-sonnet",
-        "claude-3-5-sonnet",
-        "gpt-4o",
-        "gpt-4o-mini",
-        "deepseek-r1",
+        "deepseek-v4-flash-free",
+        "space-bunny-free",
+        "mimo-v2.6-flash-free",
+        "mimo-v2.5-free",
+        "ling-3.0-flash-fin-free",
+        "nemotron-3.5-lightning-free",
+        "longcat-2.5-preview-free",
         "deepseek-v4-pro",
-        "gemini-2.0-flash",
-        "kimi-k2.6",
-        "qwen-2.5-max"
+        "deepseek-v4-flash",
+        "qwen3.8-max",
+        "minimax-m3",
+        "glm-5.3-flash",
+        "kimi-k2.6"
     )
+
+    fun isFreeModel(provider: LLMProviderType, model: String): Boolean {
+        if (provider != LLMProviderType.OPENCODE_ZEN) return false
+        return model == "big-pickle" || model.endsWith("-free")
+    }
 
     fun getDefaultModels(provider: LLMProviderType): List<String> {
         return when (provider) {
@@ -157,20 +164,27 @@ object OpenCodeClient {
             }
 
             val body = conn.inputStream.bufferedReader().use { it.readText() }
-            val json = JSONObject(body)
-            val dataArray = json.optJSONArray("data")
             val list = mutableListOf<String>()
-
-            if (dataArray != null) {
-                for (i in 0 until dataArray.length()) {
-                    val item = dataArray.optJSONObject(i)
-                    val id = item?.optString("id") ?: ""
-                    if (id.isNotBlank()) {
-                        list.add(id)
+            val trimmed = body.trim()
+            if (trimmed.startsWith("[")) {
+                val array = JSONArray(trimmed)
+                for (i in 0 until array.length()) {
+                    val item = array.optJSONObject(i)
+                    val id = item?.optString("id") ?: array.optString(i)
+                    if (id.isNotBlank()) list.add(id)
+                }
+            } else if (trimmed.startsWith("{")) {
+                val json = JSONObject(trimmed)
+                val array = json.optJSONArray("data") ?: json.optJSONArray("models")
+                if (array != null) {
+                    for (i in 0 until array.length()) {
+                        val item = array.optJSONObject(i)
+                        val id = item?.optString("id") ?: array.optString(i)
+                        if (id.isNotBlank()) list.add(id)
                     }
                 }
             }
-            return if (list.isNotEmpty()) list.sorted() else getDefaultModels(provider)
+            return if (list.isNotEmpty()) list.distinct().sorted() else getDefaultModels(provider)
         } catch (e: Exception) {
             Log.w(TAG, "Ошибка получения моделей OpenCode: ${e.message}")
             return getDefaultModels(provider)
@@ -245,7 +259,10 @@ object OpenCodeClient {
                 val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $responseCode"
                 val cleanErr = try {
                     val errJson = JSONObject(err)
-                    errJson.optJSONObject("error")?.optString("message", err) ?: err
+                    val errorObj = errJson.optJSONObject("error")
+                    errorObj?.optString("message")
+                        ?: errJson.optString("message").takeIf { it.isNotBlank() }
+                        ?: err
                 } catch (_: Exception) {
                     err
                 }
@@ -253,6 +270,12 @@ object OpenCodeClient {
                 val tip = when (responseCode) {
                     401 -> "Неверный API-ключ. Проверьте, что ключ подходит для выбранной подписки (${provider.displayName})."
                     403 -> "Доступ отклонен ($cleanErr). Проверьте активность подписки ${provider.displayName}."
+                    404 -> if (provider == LLMProviderType.OPENCODE_ZEN && !isFreeModel(provider, model)) {
+                        "Модель '$model' недоступна или требует платных кредитов OpenCode Zen (HTTP 404).\n💡 Выберите модель из бесплатного тарифа Free (например, 'big-pickle' или 'deepseek-v4-flash-free')."
+                    } else {
+                        "Модель '$model' не найдена или временно недоступна: $cleanErr"
+                    }
+                    429 -> "Превышен лимит запросов OpenCode. Попробуйте чуть позже."
                     else -> cleanErr
                 }
                 throw Exception("Ошибка ${provider.displayName} ($responseCode): $tip")

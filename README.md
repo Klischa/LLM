@@ -328,7 +328,7 @@ adb push models_gguf/qwen2.5-1.5b-q4_k_m.gguf /sdcard/Download/
 
 ---
 
-## 16. Подключение внешнего API OpenCode: подписки GO и ZEN (v1.2.3)
+## 16. Подключение внешнего API OpenCode: подписки GO и ZEN (v1.2.4)
 
 В приложении реализован гибридный режим работы (Офлайн GGUF + Облачные API):
 - **OpenCode GO**:
@@ -337,7 +337,8 @@ adb push models_gguf/qwen2.5-1.5b-q4_k_m.gguf /sdcard/Download/
   - Отдельное хранилище API-ключа для подписки OpenCode GO.
 - **OpenCode ZEN**:
   - Базовый эндпоинт: `https://opencode.ai/zen/v1`
-  - Преднастроенные модели: `big-pickle`, `claude-fable-5-1`, `claude-haiku-4-5`, `claude-3-7-sonnet`, `claude-3-5-sonnet`, `gpt-4o`, `gpt-4o-mini`, `deepseek-r1`, `deepseek-v4-pro`, `gemini-2.0-flash`, `kimi-k2.6`, `qwen-2.5-max`.
+  - Преднастроенные бесплатные модели (**Free Tier** с плашкой `[Free]`): `big-pickle`, `deepseek-v4-flash-free`, `space-bunny-free`, `mimo-v2.6-flash-free`, `mimo-v2.5-free`, `ling-3.0-flash-fin-free`, `nemotron-3.5-lightning-free`, `longcat-2.5-preview-free`. Работают бесплатно без пополнения баланса!
+  - Модели со стандартной тарификацией (Standard Credits): `deepseek-v4-pro`, `deepseek-v4-flash`, `qwen3.8-max`, `minimax-m3`, `glm-5.3-flash`, `kimi-k2.6`.
   - Отдельное хранилище API-ключа для подписки OpenCode ZEN.
 - **Точная эмуляция официального OpenCode CLI-клиента**:
   - Глобальное переопределение JVM User-Agent (`System.setProperty("http.agent", ...)`) исключает утечку заголовка Dalvik.
@@ -345,7 +346,7 @@ adb push models_gguf/qwen2.5-1.5b-q4_k_m.gguf /sdcard/Download/
   - `x-opencode-client: cli`, `x-opencode-project: global`.
   - Алгоритмическая генерация `x-opencode-session` (`ses_` с нисходящим инвертированным timestamp) и `x-opencode-request` (`msg_` с восходящим timestamp) + 14 Base62 символов, полностью удовлетворяющая проверке шлюза OpenCode Edge.
   - Поддержка потокового рассуждения (`reasoning_content`) для моделей линейки DeepSeek-R1.
-  - Позволяет беспрепятственно использовать модели Free Tier (например, `big-pickle`, `claude-fable-5-1`) без ошибки `403 OpenCode's free tier can only be used from within OpenCode`.
+  - Позволяет беспрепятственно использовать модели Free Tier (например, `big-pickle`, `deepseek-v4-flash-free`) без ошибки `403 OpenCode's free tier can only be used from within OpenCode`.
 - **Потоковый вывод токенов (SSE)**: Ответы через облачный API стримятся в реальном времени с измерением скорости (`tok/s`) точно так же, как локальная модель.
 - **Динамическое обновление каталога**: Кнопка «🔄 Обновить» опрашивает эндпоинт `/v1/models` по вашему API-ключу и подтягивает актуальный список доступных моделей подписки с серверов OpenCode.
 - **Интеграция с Device Tools и историей**: Все функции устройства (фото, память, заряд) и сохранение переписки в SQLite работают как для локальной модели, так и при общении через OpenCode.

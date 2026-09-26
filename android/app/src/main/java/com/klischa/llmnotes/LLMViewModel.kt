@@ -214,7 +214,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
         val keyZen = prefs.getString(PREF_OPENCODE_ZEN_KEY, null)
             ?: prefs.getString(PREF_OPENCODE_API_KEY, "") ?: ""
         val modelGo = prefs.getString(PREF_OPENCODE_MODEL_GO, "deepseek-v4-pro") ?: "deepseek-v4-pro"
-        val modelZen = prefs.getString(PREF_OPENCODE_MODEL_ZEN, "claude-3-7-sonnet") ?: "claude-3-7-sonnet"
+        val modelZen = prefs.getString(PREF_OPENCODE_MODEL_ZEN, "big-pickle") ?: "big-pickle"
         val selectedModel = if (provider == LLMProviderType.OPENCODE_ZEN) modelZen else modelGo
         val models = OpenCodeClient.getDefaultModels(provider)
 
@@ -235,7 +235,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
         val selectedModel = when (type) {
             LLMProviderType.OPENCODE_GO -> prefs.getString(PREF_OPENCODE_MODEL_GO, "deepseek-v4-pro") ?: "deepseek-v4-pro"
-            LLMProviderType.OPENCODE_ZEN -> prefs.getString(PREF_OPENCODE_MODEL_ZEN, "claude-3-7-sonnet") ?: "claude-3-7-sonnet"
+            LLMProviderType.OPENCODE_ZEN -> prefs.getString(PREF_OPENCODE_MODEL_ZEN, "big-pickle") ?: "big-pickle"
             LLMProviderType.LOCAL_GGUF -> ""
         }
         val defaultModels = OpenCodeClient.getDefaultModels(type)
