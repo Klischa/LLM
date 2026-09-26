@@ -51,6 +51,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        try {
+            System.setProperty("http.agent", com.klischa.llmnotes.api.OpenCodeClient.OPENCODE_USER_AGENT)
+        } catch (_: Exception) {}
+
         viewModel = ViewModelProvider(this)[LLMViewModel::class.java]
 
         // 1. Запрос доступа к медиафайлам (для работы с фото/видео)

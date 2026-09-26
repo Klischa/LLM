@@ -33,7 +33,13 @@ data class ApiChatMessage(
  */
 object OpenCodeClient {
     private const val TAG = "OpenCodeClient"
-    private const val OPENCODE_USER_AGENT = "opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14"
+    const val OPENCODE_USER_AGENT = "opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14"
+
+    init {
+        try {
+            System.setProperty("http.agent", OPENCODE_USER_AGENT)
+        } catch (_: Exception) {}
+    }
     private const val BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
     private val secureRandom = java.security.SecureRandom()
     private var lastTimestamp = 0L
