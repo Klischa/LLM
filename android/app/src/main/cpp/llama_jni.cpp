@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <algorithm>
 #include <cstring>
 #include <cerrno>
 #include <sys/types.h>
@@ -234,7 +235,8 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatPrompt(
 
             // Если был передан системный промпт, но шаблон (например, DeepSeek-R1 / Gemma) проигнорировал роль system:
             if (!sys_str.empty()) {
-                std::string sample = sys_str.substr(0, std::min<size_t>(20, sys_str.size()));
+                size_t sample_len = sys_str.size() < 20 ? sys_str.size() : 20;
+                std::string sample = sys_str.substr(0, sample_len);
                 if (templated.find(sample) == std::string::npos) {
                     LOGI("Шаблон модели проигнорировал system prompt! Объединяем с сообщением пользователя.");
                     std::string merged_user = sys_str + "\n\n" + usr_str;
@@ -318,28 +320,36 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatChat(
 
                 // Если в чате был системный промпт, но шаблон (DeepSeek-R1 / Gemma) опустил роль system:
                 if (!sys_content.empty()) {
-                    std::string sample = sys_content.substr(0, std::min<size_t>(20, sys_content.size()));
+                    size_t sample_len = sys_content.size() < 20 ? sys_content.size() : 20;
+                    std::string sample = sys_content.substr(0, sample_len);
                     if (templated.find(sample) == std::string::npos) {
                         LOGI("Шаблон модели проигнорировал system prompt! Объединяем с первым сообщением user.");
-                        std::vector<std::string> merged_contents = contents;
-                        std::vector<llama_chat_message> merged_chat;
+                        std::vector<std::string> merged_roles;
+                        std::vector<std::string> merged_contents;
                         bool first_user_done = false;
 
                         for (size_t i = 0; i < (size_t)n_msgs; i++) {
                             if (roles[i] == "system") {
                                 continue;
                             } else if (roles[i] == "user" && !first_user_done) {
-                                merged_contents[i] = sys_content + "\n\n" + contents[i];
-                                merged_chat.push_back({"user", merged_contents[i].c_str()});
+                                merged_roles.push_back("user");
+                                merged_contents.push_back(sys_content + "\n\n" + contents[i]);
                                 first_user_done = true;
                             } else {
-                                merged_chat.push_back({roles[i].c_str(), merged_contents[i].c_str()});
+                                merged_roles.push_back(roles[i]);
+                                merged_contents.push_back(contents[i]);
                             }
                         }
 
                         if (!first_user_done) {
+                            merged_roles.push_back("user");
                             merged_contents.push_back(sys_content);
-                            merged_chat.push_back({"user", merged_contents.back().c_str()});
+                        }
+
+                        std::vector<llama_chat_message> merged_chat(merged_roles.size());
+                        for (size_t i = 0; i < merged_roles.size(); i++) {
+                            merged_chat[i].role = merged_roles[i].c_str();
+                            merged_chat[i].content = merged_contents[i].c_str();
                         }
 
                         int32_t m_len = llama_chat_apply_template(g_model, nullptr, merged_chat.data(), merged_chat.size(), true, nullptr, 0);
