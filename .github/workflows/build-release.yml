@@ -34,6 +34,7 @@ jobs:
       - name: Clone llama.cpp source
         run: |
           git clone --depth 1 --branch b3600 https://github.com/ggerganov/llama.cpp.git android/app/src/main/cpp/llama_cpp
+          python3 scripts/patch_llama_cpp.py android/app/src/main/cpp/llama_cpp
 
       - name: Configure Android SDK and Accept Licenses
         run: |

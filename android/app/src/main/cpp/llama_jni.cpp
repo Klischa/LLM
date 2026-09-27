@@ -347,6 +347,14 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
     int generated_count = 0;
     int32_t n_vocab = llama_n_vocab(g_model);
 
+    // Буфер последних токенов для штрафа за повторы (исключает зацикливание кода/CSS)
+    std::vector<llama_token> last_tokens;
+    last_tokens.reserve(64);
+    size_t prompt_start = prompt_tokens.size() > 64 ? prompt_tokens.size() - 64 : 0;
+    for (size_t i = prompt_start; i < prompt_tokens.size(); ++i) {
+        last_tokens.push_back(prompt_tokens[i]);
+    }
+
     // Цикл декодирования токенов
     while (generated_count < max_tokens && !g_stop_requested.load()) {
         float * logits = llama_get_logits_ith(g_context, batch.n_tokens - 1);
@@ -358,9 +366,28 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
         }
         llama_token_data_array candidates_p = { candidates.data(), candidates.size(), false };
 
+        // Штраф за повторы (repetition penalty) предотвращает циклы и вырождение генерации
+        if (!last_tokens.empty()) {
+            llama_sample_repetition_penalties(
+                g_context,
+                &candidates_p,
+                last_tokens.data(),
+                last_tokens.size(),
+                1.15f, // repeat penalty
+                0.05f, // freq penalty
+                0.0f   // present penalty
+            );
+        }
+
         llama_sample_top_p(g_context, &candidates_p, top_p, 1);
         llama_sample_temp(g_context, &candidates_p, temperature);
         llama_token new_token_id = llama_sample_token(g_context, &candidates_p);
+
+        // Обновление окна последних токенов
+        if (last_tokens.size() >= 64) {
+            last_tokens.erase(last_tokens.begin());
+        }
+        last_tokens.push_back(new_token_id);
 
         if (llama_token_is_eog(g_model, new_token_id)) {
             break;
