@@ -34,7 +34,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -864,7 +863,7 @@ fun ChatMessageBubble(
     }
 
     val displayAnswer = parsed.answerText
-    var isThoughtExpanded by rememberSaveable(message.id) { mutableStateOf(false) }
+    var isThoughtExpanded by remember(message.id) { mutableStateOf(false) }
 
     val codeBlocks = remember(displayAnswer) {
         if (!isUser) FileStorageManager.extractCodeBlocks(displayAnswer) else emptyList()
@@ -927,7 +926,7 @@ fun ChatMessageBubble(
                                         Spacer(modifier = Modifier.width(6.dp))
                                         CircularProgressIndicator(
                                             modifier = Modifier.size(10.dp),
-                                            strokeWidth = 1.5.dp,
+                                            strokeWidth = 2.dp,
                                             color = MaterialTheme.colorScheme.primary
                                         )
                                     }

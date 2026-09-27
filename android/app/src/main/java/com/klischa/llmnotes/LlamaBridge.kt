@@ -42,4 +42,8 @@ object LlamaBridge {
     ): String
     external fun nativeStop()
     external fun nativeUnload()
+
+    fun stopGeneration() {
+        nativeStop()
+    }
 }
