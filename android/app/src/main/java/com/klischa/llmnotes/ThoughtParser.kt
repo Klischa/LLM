@@ -26,16 +26,22 @@ object ThoughtParser {
 
     /**
      * Обрезает строку при первом обнаружении любого служебного стоп-токена диалога
+     * и очищает висячие префиксы тегов (<, |, ｜) и шаблонные заполнители (|name|)
      */
     fun cleanStopTokens(raw: String): String {
-        var text = raw
+        var text = raw.replace("|name|", "LLM")
         for (marker in STOP_MARKERS) {
             val idx = text.indexOf(marker)
             if (idx != -1) {
                 text = text.substring(0, idx)
             }
         }
-        return text.trimEnd()
+        text = text.trimEnd()
+        // Устраняем висячие служебные префиксы в самом конце текста
+        while (text.endsWith("<") || text.endsWith("|") || text.endsWith("｜")) {
+            text = text.dropLast(1).trimEnd()
+        }
+        return text
     }
 
     /**

@@ -39,25 +39,28 @@ data class ChatMessage(
 enum class SystemPromptPreset(val title: String, val prompt: String) {
     UNIVERSAL(
         "Универсальный",
+        "Инструкция: Всегда отвечай исключительно на русском языке. " +
         "Ты — умный, точный и лаконичный русскоязычный персональный ассистент. " +
-        "Всегда отвечай исключительно на русском языке. " +
         "Твоя задача — отвечать на вопросы понятно и по существу, помогать работать с заметками, " +
         "делать емкие пересказы и структурировать информацию без лишней 'воды'."
     ),
     CONCISE(
         "Кратко",
-        "Ты — редактор-аналитик. Отвечай исключительно на русском языке, предельно кратко, " +
-        "тезисно и строго по делу. Выделяй только главные факты, даты и выводы. Никаких пустых приветствий и вводных слов."
+        "Инструкция: Всегда отвечай исключительно на русском языке. " +
+        "Ты — редактор-аналитик. Отвечай предельно кратко, тезисно и строго по делу. " +
+        "Выделяй только главные факты, даты и выводы. Никаких пустых приветствий и вводных слов."
     ),
     TASKS(
         "Задачи",
-        "Ты — менеджер задач. Всегда отвечай на русском языке. Анализируй текст и формируй структурированный список " +
-        "конкретных действий (Action Items) с чекбоксами [ ] и дедлайнами."
+        "Инструкция: Всегда отвечай исключительно на русском языке. " +
+        "Ты — менеджер задач. Анализируй текст и формируй структурированный список конкретных действий " +
+        "(Action Items) с чекбоксами [ ] и дедлайнами."
     ),
     DIALOG(
         "Диалог",
-        "Ты — эрудированный, дружелюбный и внимательный русскоязычный собеседник. Всегда отвечай на русском языке, " +
-        "развернуто, живым языком, приводи примеры и рассуждай логично."
+        "Инструкция: Всегда общайся и отвечай исключительно на русском языке. " +
+        "Ты — эрудированный, дружелюбный и внимательный русскоязычный собеседник. Отвечай развернуто, " +
+        "живым языком, приводи примеры и рассуждай логично."
     )
 }
 
@@ -881,7 +884,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                         onToken = { tokenPiece ->
                             tokenCount++
                             responseBuilder.append(tokenPiece)
-                            val currentText = responseBuilder.toString()
+                            val currentText = ThoughtParser.cleanStopTokens(responseBuilder.toString())
                             val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
                             val speed = if (elapsedSec > 0.05f) tokenCount / elapsedSec else 0.0f
 
@@ -990,7 +993,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                val currentText = responseBuilder.toString()
+                val currentText = ThoughtParser.cleanStopTokens(responseBuilder.toString())
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
                 val speed = if (elapsedSec > 0.05f) tokenCount / elapsedSec else 0.0f
 

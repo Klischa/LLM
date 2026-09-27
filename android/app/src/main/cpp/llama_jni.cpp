@@ -215,7 +215,23 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatPrompt(
         std::vector<char> buf(req_len + 1, 0);
         int32_t res_len = llama_chat_apply_template(g_model, nullptr, chat.data(), chat.size(), true, buf.data(), buf.size());
         if (res_len > 0) {
-            return env->NewStringUTF(std::string(buf.data(), res_len).c_str());
+            std::string templated(buf.data(), res_len);
+
+            // Если шаблон опустил system prompt (как в DeepSeek-R1 / Gemma):
+            if (!sys_str.empty() && templated.find(sys_str) == std::string::npos) {
+                LOGI("Шаблон модели опустил system prompt. Внедряем системную инструкцию.");
+                size_t user_chatml = templated.find("<|im_start|>user");
+                size_t user_deepseek = templated.find("<｜User｜>");
+                if (user_chatml != std::string::npos) {
+                    templated.insert(user_chatml, "<|im_start|>system\n" + sys_str + "<|im_end|>\n");
+                } else if (user_deepseek != std::string::npos) {
+                    templated.insert(user_deepseek, sys_str + "\n\n");
+                } else {
+                    templated = sys_str + "\n\n" + templated;
+                }
+            }
+
+            return env->NewStringUTF(templated.c_str());
         }
     }
 
@@ -247,6 +263,7 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatChat(
     std::vector<std::string> roles(n_msgs);
     std::vector<std::string> contents(n_msgs);
     std::vector<llama_chat_message> chat(n_msgs);
+    std::string sys_content = "";
 
     for (int i = 0; i < n_msgs; i++) {
         jstring r_str = (jstring)env->GetObjectArrayElement(roles_arr, i);
@@ -257,6 +274,10 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatChat(
 
         roles[i] = r_chars ? r_chars : "";
         contents[i] = c_chars ? c_chars : "";
+
+        if (roles[i] == "system" && sys_content.empty()) {
+            sys_content = contents[i];
+        }
 
         if (r_str && r_chars) env->ReleaseStringUTFChars(r_str, r_chars);
         if (c_str && c_chars) env->ReleaseStringUTFChars(c_str, c_chars);
@@ -274,7 +295,23 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatChat(
             std::vector<char> buf(req_len + 1, 0);
             int32_t res_len = llama_chat_apply_template(g_model, nullptr, chat.data(), chat.size(), true, buf.data(), buf.size());
             if (res_len > 0) {
-                return env->NewStringUTF(std::string(buf.data(), res_len).c_str());
+                std::string templated(buf.data(), res_len);
+
+                // Если шаблон опустил system prompt (как в DeepSeek-R1 / Gemma):
+                if (!sys_content.empty() && templated.find(sys_content) == std::string::npos) {
+                    LOGI("Шаблон модели опустил system prompt. Внедряем системную инструкцию.");
+                    size_t user_chatml = templated.find("<|im_start|>user");
+                    size_t user_deepseek = templated.find("<｜User｜>");
+                    if (user_chatml != std::string::npos) {
+                        templated.insert(user_chatml, "<|im_start|>system\n" + sys_content + "<|im_end|>\n");
+                    } else if (user_deepseek != std::string::npos) {
+                        templated.insert(user_deepseek, sys_content + "\n\n");
+                    } else {
+                        templated = sys_content + "\n\n" + templated;
+                    }
+                }
+
+                return env->NewStringUTF(templated.c_str());
             }
         }
     }
@@ -461,6 +498,17 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
 
         n_cur++;
         generated_count++;
+    }
+
+    // Удаляем любые остаточные висячие символы разметки в конце ответа (<, |, ｜)
+    while (!full_response.empty() && 
+           (full_response.back() == '<' || full_response.back() == '|' || (unsigned char)full_response.back() > 127)) {
+        size_t last_lt = full_response.rfind('<');
+        if (last_lt != std::string::npos && last_lt >= full_response.size() - 6) {
+            full_response = full_response.substr(0, last_lt);
+        } else {
+            break;
+        }
     }
 
     llama_batch_free(batch);
