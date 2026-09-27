@@ -8,7 +8,10 @@ data class ParsedMessage(
 
 object ThoughtParser {
     val STOP_MARKERS = listOf(
+        "<|",
+        "<｜",
         "<|im_end|>",
+        "<|im_end|",
         "<|im_start|>",
         "<|endoftext|>",
         "<|end_of_text|>",
@@ -44,8 +47,8 @@ object ThoughtParser {
         // Случай 1: Присутствует закрывающий тег </think> (модель завершила рассуждения и выдала ответ)
         if (cleaned.contains("</think>")) {
             val parts = cleaned.split("</think>", limit = 2)
-            val thought = parts[0].replace("<think>", "").trim()
-            val answer = parts[1].trim()
+            val thought = cleanStopTokens(parts[0].replace("<think>", "").trim())
+            val answer = cleanStopTokens(parts[1].trim())
             return ParsedMessage(
                 thinkingText = thought.ifBlank { null },
                 answerText = answer,
@@ -55,7 +58,7 @@ object ThoughtParser {
 
         // Случай 2: Текст начинается с <think>, но закрывающего тега еще нет (идет процесс размышления)
         if (cleaned.startsWith("<think>")) {
-            val thought = cleaned.removePrefix("<think>").trim()
+            val thought = cleanStopTokens(cleaned.removePrefix("<think>").trim())
             return ParsedMessage(
                 thinkingText = thought.ifBlank { null },
                 answerText = "",

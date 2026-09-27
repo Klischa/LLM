@@ -383,8 +383,8 @@ fun QuickPromptDialogContent(
                                         LlamaBridge.nativeGenerate(
                                             formatted,
                                             1024,
-                                            0.3f,
-                                            0.85f,
+                                            0.6f,
+                                            0.9f,
                                             callback
                                         )
                                     } else {

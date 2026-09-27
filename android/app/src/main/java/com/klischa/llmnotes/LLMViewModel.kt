@@ -95,8 +95,8 @@ data class UiState(
     val generationTimeSeconds: Float = 0.0f,
     val allocatedRamMb: Long = 0,
     val threadCount: Int = 2, // Оптимум 2 ядра Cortex-A76 для Helio G99
-    val temperature: Float = 0.3f,
-    val topP: Float = 0.85f
+    val temperature: Float = 0.6f,
+    val topP: Float = 0.9f
 ) {
     val currentApiKey: String
         get() = when (providerType) {
@@ -833,8 +833,11 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
                 rolesList.add("user")
                 contentsList.add(msg.text)
             } else if (msg.role == MessageRole.ASSISTANT && msg.text.isNotBlank()) {
-                rolesList.add("assistant")
-                contentsList.add(msg.text)
+                val cleanText = ThoughtParser.cleanStopTokens(msg.text)
+                if (cleanText.isNotBlank()) {
+                    rolesList.add("assistant")
+                    contentsList.add(cleanText)
+                }
             }
         }
 
