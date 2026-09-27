@@ -40,23 +40,24 @@ enum class SystemPromptPreset(val title: String, val prompt: String) {
     UNIVERSAL(
         "Универсальный",
         "Ты — умный, точный и лаконичный русскоязычный персональный ассистент. " +
+        "Всегда отвечай исключительно на русском языке. " +
         "Твоя задача — отвечать на вопросы понятно и по существу, помогать работать с заметками, " +
         "делать емкие пересказы и структурировать информацию без лишней 'воды'."
     ),
     CONCISE(
         "Кратко",
-        "Ты — редактор-аналитик. Отвечай предельно кратко, тезисно и строго по делу. " +
-        "Выделяй только главные факты, даты и выводы. Никаких пустых приветствий и вводных слов."
+        "Ты — редактор-аналитик. Отвечай исключительно на русском языке, предельно кратко, " +
+        "тезисно и строго по делу. Выделяй только главные факты, даты и выводы. Никаких пустых приветствий и вводных слов."
     ),
     TASKS(
         "Задачи",
-        "Ты — менеджер задач. Анализируй текст и формируй структурированный список конкретных действий " +
-        "(Action Items) с чекбоксами [ ] и дедлайнами."
+        "Ты — менеджер задач. Всегда отвечай на русском языке. Анализируй текст и формируй структурированный список " +
+        "конкретных действий (Action Items) с чекбоксами [ ] и дедлайнами."
     ),
     DIALOG(
         "Диалог",
-        "Ты — эрудированный, дружелюбный и внимательный собеседник. Отвечай развернуто, " +
-        "живым языком, приводи примеры и рассуждай логично."
+        "Ты — эрудированный, дружелюбный и внимательный русскоязычный собеседник. Всегда отвечай на русском языке, " +
+        "развернуто, живым языком, приводи примеры и рассуждай логично."
     )
 }
 
@@ -975,6 +976,17 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
             val callback = LlamaBridge.TokenCallback { tokenPiece ->
                 tokenCount++
                 responseBuilder.append(tokenPiece)
+
+                // Страховочная проверка на появление стоп-маркеров во время стриминга
+                for (marker in ThoughtParser.STOP_MARKERS) {
+                    val idx = responseBuilder.indexOf(marker)
+                    if (idx != -1) {
+                        LlamaBridge.stopGeneration()
+                        responseBuilder.setLength(idx)
+                        break
+                    }
+                }
+
                 val currentText = responseBuilder.toString()
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
                 val speed = if (elapsedSec > 0.05f) tokenCount / elapsedSec else 0.0f
@@ -1006,7 +1018,7 @@ class LLMViewModel(application: Application) : AndroidViewModel(application) {
 
             val totalElapsed = (System.currentTimeMillis() - startTime) / 1000f
             val finalSpeed = if (totalElapsed > 0.05f) tokenCount / totalElapsed else 0.0f
-            val finalText = responseBuilder.toString()
+            val finalText = ThoughtParser.cleanStopTokens(responseBuilder.toString())
 
             val completedMsg = ChatMessage(
                 id = assistantMsgId,

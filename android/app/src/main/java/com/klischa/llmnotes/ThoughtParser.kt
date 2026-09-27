@@ -1,0 +1,73 @@
+package com.klischa.llmnotes
+
+data class ParsedMessage(
+    val thinkingText: String? = null,
+    val answerText: String = "",
+    val isStillThinking: Boolean = false
+)
+
+object ThoughtParser {
+    val STOP_MARKERS = listOf(
+        "<|im_end|>",
+        "<|im_start|>",
+        "<|endoftext|>",
+        "<|end_of_text|>",
+        "<|eot_id|>",
+        "<end_of_turn>",
+        "</s>",
+        "<｜end of sentence｜>",
+        "<｜Assistant｜>",
+        "<｜User｜>",
+        "[|im_end|]"
+    )
+
+    /**
+     * Обрезает строку при первом обнаружении любого служебного стоп-токена диалога
+     */
+    fun cleanStopTokens(raw: String): String {
+        var text = raw
+        for (marker in STOP_MARKERS) {
+            val idx = text.indexOf(marker)
+            if (idx != -1) {
+                text = text.substring(0, idx)
+            }
+        }
+        return text.trimEnd()
+    }
+
+    /**
+     * Разделяет рассуждения модели (<think>...</think>) и окончательный ответ пользователю
+     */
+    fun parse(rawText: String, isStreaming: Boolean = false): ParsedMessage {
+        val cleaned = cleanStopTokens(rawText)
+
+        // Случай 1: Присутствует закрывающий тег </think> (модель завершила рассуждения и выдала ответ)
+        if (cleaned.contains("</think>")) {
+            val parts = cleaned.split("</think>", limit = 2)
+            val thought = parts[0].replace("<think>", "").trim()
+            val answer = parts[1].trim()
+            return ParsedMessage(
+                thinkingText = thought.ifBlank { null },
+                answerText = answer,
+                isStillThinking = false
+            )
+        }
+
+        // Случай 2: Текст начинается с <think>, но закрывающего тега еще нет (идет процесс размышления)
+        if (cleaned.startsWith("<think>")) {
+            val thought = cleaned.removePrefix("<think>").trim()
+            return ParsedMessage(
+                thinkingText = thought.ifBlank { null },
+                answerText = "",
+                isStillThinking = isStreaming
+            )
+        }
+
+        // Случай 3: Обычный ответ без рассуждений
+        return ParsedMessage(
+            thinkingText = null,
+            answerText = cleaned,
+            isStillThinking = false
+        )
+    }
+}

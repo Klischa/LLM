@@ -34,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +43,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -51,8 +53,10 @@ import com.klischa.llmnotes.ChatMessage
 import com.klischa.llmnotes.FileStorageManager
 import com.klischa.llmnotes.LLMViewModel
 import com.klischa.llmnotes.MessageRole
+import com.klischa.llmnotes.ParsedMessage
 import com.klischa.llmnotes.R
 import com.klischa.llmnotes.SystemPromptPreset
+import com.klischa.llmnotes.ThoughtParser
 import com.klischa.llmnotes.UiState
 import com.klischa.llmnotes.api.LLMProviderType
 import com.klischa.llmnotes.api.OpenCodeClient
@@ -342,8 +346,11 @@ fun ChatScreen(
                                 ChatMessageBubble(
                                     message = message,
                                     onCopyClick = {
-                                        clipboardManager.setText(AnnotatedString(message.text))
-                                        Toast.makeText(context, "Текст скопирован", Toast.LENGTH_SHORT).show()
+                                        val cleanToCopy = ThoughtParser.cleanStopTokens(message.text)
+                                        val answerOnly = ThoughtParser.parse(cleanToCopy, false).answerText
+                                        val textToCopy = if (answerOnly.isNotBlank()) answerOnly else cleanToCopy
+                                        clipboardManager.setText(AnnotatedString(textToCopy))
+                                        Toast.makeText(context, "Текст ответа скопирован", Toast.LENGTH_SHORT).show()
                                     }
                                 )
                             }
@@ -850,8 +857,17 @@ fun ChatMessageBubble(
     val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
     val timeStr = timeFormat.format(Date(message.timestamp))
     val context = LocalContext.current
-    val codeBlocks = remember(message.text) {
-        if (!isUser) FileStorageManager.extractCodeBlocks(message.text) else emptyList()
+
+    val parsed = remember(message.text, message.isStreaming) {
+        if (!isUser) ThoughtParser.parse(message.text, message.isStreaming)
+        else ParsedMessage(thinkingText = null, answerText = message.text, isStillThinking = false)
+    }
+
+    val displayAnswer = parsed.answerText
+    var isThoughtExpanded by rememberSaveable(message.id) { mutableStateOf(false) }
+
+    val codeBlocks = remember(displayAnswer) {
+        if (!isUser) FileStorageManager.extractCodeBlocks(displayAnswer) else emptyList()
     }
 
     Row(
@@ -883,10 +899,67 @@ fun ChatMessageBubble(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
+                // Блок размышлений модели (DeepSeek-R1 / QwQ)
+                if (!isUser && parsed.thinkingText != null) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .clickable { isThoughtExpanded = !isThoughtExpanded },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = if (parsed.isStillThinking) "💭 Размышление..." else "💭 Рассуждения",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    if (parsed.isStillThinking) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(10.dp),
+                                            strokeWidth = 1.5.dp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = if (isThoughtExpanded) "Свернуть ▲" else "Раскрыть ▼",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            if (isThoughtExpanded || (parsed.isStillThinking && displayAnswer.isEmpty())) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                SelectionContainer {
+                                    Text(
+                                        text = parsed.thinkingText,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontStyle = FontStyle.Italic,
+                                            lineHeight = 16.sp
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Текст сообщения
                 SelectionContainer {
+                    val showCursor = message.isStreaming && displayAnswer.isEmpty() && !parsed.isStillThinking
                     Text(
-                        text = if (message.text.isEmpty() && message.isStreaming) "▌" else message.text,
+                        text = if (showCursor) "▌" else displayAnswer,
                         style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp),
                         color = if (isUser) {
                             MaterialTheme.colorScheme.onPrimaryContainer

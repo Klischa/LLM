@@ -19,6 +19,20 @@ static llama_context * g_context = nullptr;
 static std::atomic<bool> g_stop_requested(false);
 static std::string g_last_error = "";
 
+static const std::vector<std::string> STOP_PATTERNS = {
+    "<|im_end|>",
+    "<|im_start|>",
+    "<|eot_id|>",
+    "<|endoftext|>",
+    "<|end_of_text|>",
+    "<end_of_turn>",
+    "</s>",
+    "<｜end of sentence｜>",
+    "<｜Assistant｜>",
+    "<｜User｜>",
+    "[|im_end|]"
+};
+
 static void llama_log_callback_capture(enum ggml_log_level level, const char * text, void * user_data) {
     if (text) {
         if (level == GGML_LOG_LEVEL_ERROR) {
@@ -216,7 +230,27 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatPrompt(
         std::vector<char> buf(req_len + 1, 0);
         int32_t res_len = llama_chat_apply_template(g_model, nullptr, chat.data(), chat.size(), true, buf.data(), buf.size());
         if (res_len > 0) {
-            return env->NewStringUTF(std::string(buf.data(), res_len).c_str());
+            std::string templated(buf.data(), res_len);
+
+            // Если был передан системный промпт, но шаблон (например, DeepSeek-R1 / Gemma) проигнорировал роль system:
+            if (!sys_str.empty()) {
+                std::string sample = sys_str.substr(0, std::min<size_t>(20, sys_str.size()));
+                if (templated.find(sample) == std::string::npos) {
+                    LOGI("Шаблон модели проигнорировал system prompt! Объединяем с сообщением пользователя.");
+                    std::string merged_user = sys_str + "\n\n" + usr_str;
+                    std::vector<llama_chat_message> merged_chat = { {"user", merged_user.c_str()} };
+                    int32_t m_len = llama_chat_apply_template(g_model, nullptr, merged_chat.data(), merged_chat.size(), true, nullptr, 0);
+                    if (m_len > 0) {
+                        std::vector<char> m_buf(m_len + 1, 0);
+                        int32_t m_res = llama_chat_apply_template(g_model, nullptr, merged_chat.data(), merged_chat.size(), true, m_buf.data(), m_buf.size());
+                        if (m_res > 0) {
+                            return env->NewStringUTF(std::string(m_buf.data(), m_res).c_str());
+                        }
+                    }
+                }
+            }
+
+            return env->NewStringUTF(templated.c_str());
         }
     }
 
@@ -248,6 +282,7 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatChat(
     std::vector<std::string> roles(n_msgs);
     std::vector<std::string> contents(n_msgs);
     std::vector<llama_chat_message> chat(n_msgs);
+    std::string sys_content = "";
 
     for (int i = 0; i < n_msgs; i++) {
         jstring r_str = (jstring)env->GetObjectArrayElement(roles_arr, i);
@@ -258,6 +293,10 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatChat(
 
         roles[i] = r_chars ? r_chars : "";
         contents[i] = c_chars ? c_chars : "";
+
+        if (roles[i] == "system" && sys_content.empty()) {
+            sys_content = contents[i];
+        }
 
         if (r_str && r_chars) env->ReleaseStringUTFChars(r_str, r_chars);
         if (c_str && c_chars) env->ReleaseStringUTFChars(c_str, c_chars);
@@ -275,7 +314,46 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatChat(
             std::vector<char> buf(req_len + 1, 0);
             int32_t res_len = llama_chat_apply_template(g_model, nullptr, chat.data(), chat.size(), true, buf.data(), buf.size());
             if (res_len > 0) {
-                return env->NewStringUTF(std::string(buf.data(), res_len).c_str());
+                std::string templated(buf.data(), res_len);
+
+                // Если в чате был системный промпт, но шаблон (DeepSeek-R1 / Gemma) опустил роль system:
+                if (!sys_content.empty()) {
+                    std::string sample = sys_content.substr(0, std::min<size_t>(20, sys_content.size()));
+                    if (templated.find(sample) == std::string::npos) {
+                        LOGI("Шаблон модели проигнорировал system prompt! Объединяем с первым сообщением user.");
+                        std::vector<std::string> merged_contents = contents;
+                        std::vector<llama_chat_message> merged_chat;
+                        bool first_user_done = false;
+
+                        for (size_t i = 0; i < (size_t)n_msgs; i++) {
+                            if (roles[i] == "system") {
+                                continue;
+                            } else if (roles[i] == "user" && !first_user_done) {
+                                merged_contents[i] = sys_content + "\n\n" + contents[i];
+                                merged_chat.push_back({"user", merged_contents[i].c_str()});
+                                first_user_done = true;
+                            } else {
+                                merged_chat.push_back({roles[i].c_str(), merged_contents[i].c_str()});
+                            }
+                        }
+
+                        if (!first_user_done) {
+                            merged_contents.push_back(sys_content);
+                            merged_chat.push_back({"user", merged_contents.back().c_str()});
+                        }
+
+                        int32_t m_len = llama_chat_apply_template(g_model, nullptr, merged_chat.data(), merged_chat.size(), true, nullptr, 0);
+                        if (m_len > 0) {
+                            std::vector<char> m_buf(m_len + 1, 0);
+                            int32_t m_res = llama_chat_apply_template(g_model, nullptr, merged_chat.data(), merged_chat.size(), true, m_buf.data(), m_buf.size());
+                            if (m_res > 0) {
+                                return env->NewStringUTF(std::string(m_buf.data(), m_res).c_str());
+                            }
+                        }
+                    }
+                }
+
+                return env->NewStringUTF(templated.c_str());
             }
         }
     }
@@ -348,11 +426,15 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
     int32_t n_vocab = llama_n_vocab(g_model);
 
     // Буфер последних токенов для штрафа за повторы (исключает зацикливание кода/CSS)
+    // Важно: исключаем контрольные токены и токены окончания генерации, чтобы не штрафовать модель за завершение ответа
     std::vector<llama_token> last_tokens;
     last_tokens.reserve(64);
     size_t prompt_start = prompt_tokens.size() > 64 ? prompt_tokens.size() - 64 : 0;
     for (size_t i = prompt_start; i < prompt_tokens.size(); ++i) {
-        last_tokens.push_back(prompt_tokens[i]);
+        llama_token t = prompt_tokens[i];
+        if (!llama_token_is_control(g_model, t) && !llama_token_is_eog(g_model, t)) {
+            last_tokens.push_back(t);
+        }
     }
 
     // Цикл декодирования токенов
@@ -383,27 +465,72 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
         llama_sample_temp(g_context, &candidates_p, temperature);
         llama_token new_token_id = llama_sample_token(g_context, &candidates_p);
 
-        // Обновление окна последних токенов
-        if (last_tokens.size() >= 64) {
-            last_tokens.erase(last_tokens.begin());
-        }
-        last_tokens.push_back(new_token_id);
-
-        if (llama_token_is_eog(g_model, new_token_id)) {
+        // 1. Проверка на стандартный EOG / EOS / EOT токен
+        if (llama_token_is_eog(g_model, new_token_id) ||
+            new_token_id == llama_token_eos(g_model) ||
+            new_token_id == llama_token_eot(g_model)) {
+            LOGI("Генерация завершена: EOG/EOS токен %d", new_token_id);
             break;
         }
 
         char piece_buf[256];
         int n_chars = llama_token_to_piece(g_model, new_token_id, piece_buf, sizeof(piece_buf), 0, true);
-        if (n_chars > 0) {
-            std::string piece(piece_buf, n_chars);
-            full_response += piece;
+        if (n_chars <= 0) {
+            batch.n_tokens = 0;
+            batch_add_token(batch, new_token_id, n_cur, { 0 }, true);
+            if (llama_decode(g_context, batch) != 0) break;
+            n_cur++;
+            generated_count++;
+            continue;
+        }
 
-            if (callback_obj != nullptr && on_token_method != nullptr) {
-                jstring piece_jstr = env->NewStringUTF(piece.c_str());
-                env->CallVoidMethod(callback_obj, on_token_method, piece_jstr);
-                env->DeleteLocalRef(piece_jstr);
+        std::string piece(piece_buf, n_chars);
+
+        // 2. Проверка стоп-паттернов в текущем кусочке
+        bool is_stop = false;
+        for (const auto & pat : STOP_PATTERNS) {
+            if (piece == pat || piece.find(pat) != std::string::npos) {
+                is_stop = true;
+                break;
             }
+        }
+        if (is_stop) {
+            LOGI("Генерация остановлена по стоп-токену: %s", piece.c_str());
+            break;
+        }
+
+        // 3. Проверка стоп-паттернов на стыке строк в full_response
+        full_response += piece;
+        bool tail_has_stop = false;
+        size_t stop_cut_pos = std::string::npos;
+        for (const auto & pat : STOP_PATTERNS) {
+            size_t pos = full_response.rfind(pat);
+            if (pos != std::string::npos && pos >= full_response.size() - pat.size() - 8) {
+                tail_has_stop = true;
+                stop_cut_pos = pos;
+                LOGI("Обнаружен стоп-паттерн в конце текста ответа: %s", pat.c_str());
+                break;
+            }
+        }
+
+        if (tail_has_stop) {
+            full_response = full_response.substr(0, stop_cut_pos);
+            break;
+        }
+
+        // 4. Отправка подтвержденного токена в UI callback
+        if (callback_obj != nullptr && on_token_method != nullptr) {
+            jstring piece_jstr = env->NewStringUTF(piece.c_str());
+            env->CallVoidMethod(callback_obj, on_token_method, piece_jstr);
+            env->DeleteLocalRef(piece_jstr);
+        }
+
+        // 5. Обновление буфера штрафов только обычными смысловыми токенами
+        if (!llama_token_is_control(g_model, new_token_id)) {
+            if (last_tokens.size() >= 64) {
+                last_tokens.erase(last_tokens.begin());
+            }
+            last_tokens.push_back(new_token_id);
         }
 
         batch.n_tokens = 0;

@@ -365,9 +365,19 @@ fun QuickPromptDialogContent(
                                         )
                                         val callback = LlamaBridge.TokenCallback { token ->
                                             responseBuilder.append(token)
+                                            for (marker in ThoughtParser.STOP_MARKERS) {
+                                                val idx = responseBuilder.indexOf(marker)
+                                                if (idx != -1) {
+                                                    LlamaBridge.stopGeneration()
+                                                    responseBuilder.setLength(idx)
+                                                    break
+                                                }
+                                            }
                                             val cur = responseBuilder.toString()
+                                            val parsed = ThoughtParser.parse(cur, true)
+                                            val preview = if (parsed.answerText.isNotBlank()) parsed.answerText else "💭 Размышляет..."
                                             coroutineScope.launch(Dispatchers.Main) {
-                                                responseText = cur
+                                                responseText = preview
                                             }
                                         }
                                         LlamaBridge.nativeGenerate(
@@ -384,7 +394,8 @@ fun QuickPromptDialogContent(
                                     }
                                 }
 
-                                val finalResp = responseBuilder.toString()
+                                val parsedFinal = ThoughtParser.parse(responseBuilder.toString(), false)
+                                val finalResp = if (parsedFinal.answerText.isNotBlank()) parsedFinal.answerText else (parsedFinal.thinkingText ?: "")
                                 withContext(Dispatchers.Main) {
                                     isGenerating = false
                                     statusText = "Готово"
