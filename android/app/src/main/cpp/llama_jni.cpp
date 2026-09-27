@@ -225,9 +225,11 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatPrompt(
                 if (user_chatml != std::string::npos) {
                     templated.insert(user_chatml, "<|im_start|>system\n" + sys_str + "<|im_end|>\n");
                 } else if (user_deepseek != std::string::npos) {
-                    templated.insert(user_deepseek, sys_str + "\n\n");
+                    size_t insert_pos = user_deepseek + strlen("<｜User｜>");
+                    std::string concise_inst = "[Отвечай только на русском языке]\n";
+                    templated.insert(insert_pos, concise_inst);
                 } else {
-                    templated = sys_str + "\n\n" + templated;
+                    templated = "[Отвечай на русском языке]\n\n" + templated;
                 }
             }
 
@@ -305,9 +307,11 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeFormatChat(
                     if (user_chatml != std::string::npos) {
                         templated.insert(user_chatml, "<|im_start|>system\n" + sys_content + "<|im_end|>\n");
                     } else if (user_deepseek != std::string::npos) {
-                        templated.insert(user_deepseek, sys_content + "\n\n");
+                        size_t insert_pos = user_deepseek + strlen("<｜User｜>");
+                        std::string concise_inst = "[Отвечай только на русском языке]\n";
+                        templated.insert(insert_pos, concise_inst);
                     } else {
-                        templated = sys_content + "\n\n" + templated;
+                        templated = "[Отвечай на русском языке]\n\n" + templated;
                     }
                 }
 
@@ -354,9 +358,12 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
     }
 
     // Токенизация входного промпта
-    int n_prompt_tokens = -llama_tokenize(g_model, prompt, strlen(prompt), nullptr, 0, true, true);
+    // ВАЖНО: add_special = false, так как готовый промпт из llama_chat_apply_template / fallback
+    // уже содержит собственный BOS-токен (например, <｜begin of sentence｜> или токен 1).
+    // Повторное добавление BOS (add_special = true) ломает эмбеддинги позиций и приводит к бессвязной генерации.
+    int n_prompt_tokens = -llama_tokenize(g_model, prompt, strlen(prompt), nullptr, 0, false, true);
     std::vector<llama_token> prompt_tokens(n_prompt_tokens);
-    if (llama_tokenize(g_model, prompt, strlen(prompt), prompt_tokens.data(), prompt_tokens.size(), true, true) < 0) {
+    if (llama_tokenize(g_model, prompt, strlen(prompt), prompt_tokens.data(), prompt_tokens.size(), false, true) < 0) {
         env->ReleaseStringUTFChars(prompt_str, prompt);
         return env->NewStringUTF("Ошибка токенизации");
     }
@@ -383,16 +390,11 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
     int generated_count = 0;
     int32_t n_vocab = llama_n_vocab(g_model);
 
-    // Буфер последних токенов для штрафа за повторы (только обычные смысловые токены)
+    // Буфер последних сгенерированных токенов для мягкого штрафа за повторы
+    // ВАЖНО: не заполняем буфер токенами из входного промпта! Иначе модель штрафуется
+    // за использование обычных слов русского языка и начинает подбирать китайские и английские синонимы.
     std::vector<llama_token> last_tokens;
     last_tokens.reserve(64);
-    size_t prompt_start = prompt_tokens.size() > 64 ? prompt_tokens.size() - 64 : 0;
-    for (size_t i = prompt_start; i < prompt_tokens.size(); ++i) {
-        llama_token t = prompt_tokens[i];
-        if (!llama_token_is_control(g_model, t) && !llama_token_is_eog(g_model, t)) {
-            last_tokens.push_back(t);
-        }
-    }
 
     // Цикл декодирования токенов
     while (generated_count < max_tokens && !g_stop_requested.load()) {
@@ -405,16 +407,16 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
         }
         llama_token_data_array candidates_p = { candidates.data(), candidates.size(), false };
 
-        // Штраф за повторы (repetition penalty) предотвращает циклы и вырождение генерации
+        // Мягкий штраф за повторы только для уже сгенерированного текста (предотвращает циклы без подавления русской лексики)
         if (!last_tokens.empty()) {
             llama_sample_repetition_penalties(
                 g_context,
                 &candidates_p,
                 last_tokens.data(),
                 last_tokens.size(),
-                1.15f, // repeat penalty
-                0.05f, // freq penalty
-                0.0f   // present penalty
+                1.08f, // gentle repeat penalty
+                0.0f,  // no frequency penalty
+                0.0f   // no presence penalty
             );
         }
 
@@ -444,8 +446,6 @@ Java_com_klischa_llmnotes_LlamaBridge_nativeGenerate(
         std::string piece(piece_buf, n_chars);
 
         // 2. Строгая проверка на служебные стоп-токены разметки диалога
-        // Никакой токен, содержащий "<|" (ChatML), "<｜" (DeepSeek) или маркеры EOS,
-        // НЕ ДОЛЖЕН попадать ни в текст ответа, ни в стриминг UI!
         if (piece.find("<|") != std::string::npos ||
             piece.find("<｜") != std::string::npos ||
             piece == "</s>" ||
